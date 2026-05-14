@@ -18,7 +18,6 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
 
-
 DEFAULT_NEGATIVE_PROMPT = "blurry, distorted, low quality"
 TASK_DEFAULTS = {
     "t2i": {
@@ -492,11 +491,15 @@ def main() -> None:
         return
 
     video, audio, returned_sample_rate, action = _extract_video_audio_action(outputs)
-    _save_video(video, output_path, fps=fps, audio=audio, audio_sample_rate=returned_sample_rate or args.audio_sample_rate)
+    _save_video(
+        video, output_path, fps=fps, audio=audio, audio_sample_rate=returned_sample_rate or args.audio_sample_rate
+    )
     print(f"Saved video to {output_path}")
 
     if args.task == "action_policy":
-        action_path = Path(args.action_output) if args.action_output else output_path.with_name(f"{output_path.stem}_action.json")
+        action_path = (
+            Path(args.action_output) if args.action_output else output_path.with_name(f"{output_path.stem}_action.json")
+        )
         action_path.parent.mkdir(parents=True, exist_ok=True)
         action_path.write_text(json.dumps(_jsonable(action), indent=2) + "\n", encoding="utf-8")
         print(f"Saved action metadata to {action_path}")

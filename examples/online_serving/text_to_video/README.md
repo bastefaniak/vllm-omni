@@ -181,7 +181,7 @@ curl -X POST http://localhost:8091/v1/videos \
 | `guidance_scale`      | float  | None    | CFG guidance scale (low-noise stage)             |
 | `guidance_scale_2`    | float  | None    | CFG guidance scale (high-noise stage, Wan2.2)     |
 | `boundary_ratio`      | float  | None    | Boundary split ratio for low/high DiT (Wan2.2)   |
-| `flow_shift`          | float  | None    | Scheduler flow shift                             |
+| `flow_shift`          | float  | None    | Scheduler flow shift (Wan2.2)                    |
 | `seed`                | int    | None    | Random seed (reproducible)                       |
 | `lora`                | object | None    | LoRA configuration                               |
 

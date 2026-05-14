@@ -5,6 +5,8 @@ Source <https://github.com/vllm-project/vllm-omni/tree/main/examples/offline_inf
 
 A unified script for text-to-video generation. Supports multiple models with model-aware defaults.
 
+For backend selection and SageAttention usage, see the [Diffusion Attention Backends](../../diffusion/attention_backends.md) guide.
+
 ## Supported Models
 
 | Model | Default Resolution | Default Frames | Default Steps | Guidance | VRAM (BF16) |
@@ -125,7 +127,6 @@ python text_to_video.py \
 - `--audio-sample-rate`: audio sample rate for embedded audio (when the pipeline returns audio).
 - `--quantization`: quantization method (`fp8` for FP8, `gguf` for GGUF).
 - `--flow-shift`: scheduler flow_shift parameter.
-- `--cache-backend`: `cache_dit` for supported models.
 
 ### Wan2.2-specific
 

@@ -226,7 +226,6 @@ count, use `size` and `n` rather than `height`, `width`, or
 | `height`                 | int   | None    | Image height in pixels         |
 | `width`                  | int   | None    | Image width in pixels          |
 | `size`                   | str   | None    | Image size (e.g., "1024x1024") |
-| `n`                      | int   | 1       | Number of images for `/v1/images/generations` |
 | `num_inference_steps`    | int   | 50      | Number of denoising steps      |
 | `true_cfg_scale`         | float | 4.0     | Qwen-Image CFG scale           |
 | `seed`                   | int   | None    | Random seed (reproducible)     |

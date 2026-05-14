@@ -1,13 +1,6 @@
 # Image-To-Video
 
-This example demonstrates how to deploy Wan2.2 image-to-video models for online video generation using vLLM-Omni.
-
-## Supported Models
-
-| Model | Model ID |
-|-------|----------|
-| Wan2.2 I2V | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` |
-| Wan2.2 TI2V | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` |
+This example demonstrates how to deploy the Wan2.2 image-to-video model for online video generation using vLLM-Omni.
 
 ## Start Server
 

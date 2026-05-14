@@ -122,7 +122,6 @@ python text_to_video.py \
 - `--audio-sample-rate`: audio sample rate for embedded audio (when the pipeline returns audio).
 - `--quantization`: quantization method (`fp8` for FP8, `gguf` for GGUF).
 - `--flow-shift`: scheduler flow_shift parameter.
-- `--cache-backend`: `cache_dit` for supported models.
 
 ### Wan2.2-specific
 

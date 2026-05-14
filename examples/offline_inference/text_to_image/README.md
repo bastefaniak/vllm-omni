@@ -73,13 +73,11 @@ python text_to_image.py \
 
 | Argument | Type | Default | Description |
 | -------- | ---- | ------- | ----------- |
-| `--model` | str | `"Qwen/Qwen-Image"` | Diffusion model name or local path |
-| `--model-class-name` | str | `None` | Override pipeline class |
 | `--prompt` | str | `"a cup of coffee on the table"` | Text description for image generation |
 | `--seed` | int | `142` | Integer seed for deterministic sampling |
 | `--negative-prompt` | str | `None` | Negative prompt for classifier-free conditional guidance |
 | `--cfg-scale` | float | `4.0` | True CFG scale (model-specific guidance strength) |
-| `--guidance-scale` | float | `4.0` | Classifier-free guidance scale |
+| `--guidance-scale` | float | `1.0` | Classifier-free guidance scale |
 | `--num-images-per-prompt` | int | `1` | Number of images per prompt (saved as `output`, `output_1`, ...) |
 | `--num-inference-steps` | int | `50` | Diffusion sampling steps (more steps = higher quality, slower) |
 | `--height` | int | `1024` | Output image height in pixels |

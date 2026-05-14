@@ -2,13 +2,6 @@
 
 This example demonstrates how to generate videos from images using Wan2.2 Image-to-Video models with vLLM-Omni's offline inference API.
 
-## Supported Models
-
-| Model | Default Resolution | Default Frames | Default Steps | Guidance |
-|-------|--------------------|----------------|---------------|----------|
-| `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | auto, 480p area | 81 | 50 | 5.0 |
-| `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | auto, 480p area | 81 | 50 | 5.0 |
-
 ## Local CLI Usage
 
 Download the example image:
@@ -58,19 +51,17 @@ python image_to_video.py \
 Key arguments:
 
 - `--model`: Model ID (I2V-A14B for MoE, TI2V-5B for unified T2V+I2V).
-- `--model-class-name`: explicit pipeline class override.
 - `--image`: Path to input image (required).
 - `--prompt`: Text description of desired motion/animation.
 - `--height/--width`: Output resolution (auto-calculated from image if not set). Dimensions should be multiples of 16.
-- `--num-frames`: Number of frames (default is model-specific).
+- `--num-frames`: Number of frames (default 81).
 - `--guidance-scale` and `--guidance-scale-high`: CFG scale (applied to low/high-noise stages for MoE).
 - `--negative-prompt`: Optional list of artifacts to suppress.
 - `--boundary-ratio`: Boundary split ratio for two-stage MoE models.
-- `--flow-shift`: Scheduler flow shift. Defaults are model-specific.
+- `--flow-shift`: Scheduler flow shift (5.0 for 720p, 12.0 for 480p).
 - `--sample-solver`: Wan2.2 sampling solver. Use `unipc` for the default multistep solver, or `euler` for Lightning/Distill checkpoints.
-- `--num-inference-steps`: Number of denoising steps (default is model-specific).
+- `--num-inference-steps`: Number of denoising steps (default 50).
 - `--fps`: Frames per second for the saved MP4 (requires `diffusers` export_to_video).
-- `--frame-rate`: Generation frame rate for models that use it. Defaults to `--fps`.
 - `--output`: Path to save the generated video.
 - `--vae-use-slicing`: Enable VAE slicing for memory optimization.
 - `--vae-use-tiling`: Enable VAE tiling for memory optimization.
