@@ -268,10 +268,12 @@ def compute_mrope_position_ids_sound(
     temporal_offset: int | float,
     sound_latent_fps: float,
     base_fps: float = 24.0,
-    base_temporal_compression_factor: int = 4,
+    temporal_compression_factor_sound: int = 1,
     enable_fps_modulation: bool = True,
+    base_temporal_compression_factor: int | None = None,
 ) -> tuple[torch.Tensor, int | float]:
     """Generate mRoPE IDs for sound tokens as a (T, 1, 1) grid."""
+    del base_temporal_compression_factor
     return compute_mrope_position_ids_vision(
         grid_t=grid_t,
         grid_h=1,
@@ -279,8 +281,8 @@ def compute_mrope_position_ids_sound(
         temporal_offset=temporal_offset,
         fps=sound_latent_fps,
         base_fps=base_fps,
-        temporal_compression_factor=1,
-        base_temporal_compression_factor=base_temporal_compression_factor,
+        temporal_compression_factor=temporal_compression_factor_sound,
+        base_temporal_compression_factor=temporal_compression_factor_sound,
         enable_fps_modulation=enable_fps_modulation,
     )
 
@@ -1056,8 +1058,16 @@ class Cosmos3VFMTransformer(nn.Module):
         self.base_fps = float(_tf_config_get(model_config, "base_fps", 24.0))
         sound_gen_value = _od_config_get(od_config, "sound_gen", None)
         sound_dim_value = _od_config_get(od_config, "sound_dim", None)
+        if sound_dim_value is None:
+            sound_dim_value = _od_config_get(od_config, "io_channels", None)
+        if sound_dim_value is None:
+            sound_dim_value = _od_config_get(od_config, "vocoder_input_dim", None)
+        if sound_dim_value is None:
+            sound_dim_value = _od_config_get(od_config, "latent_ch", None)
         self.sound_gen = _as_bool(sound_gen_value) if sound_gen_value is not None else sound_dim_value is not None
-        self.sound_dim = int(sound_dim_value if sound_dim_value is not None else 64)
+        from .sound_tokenizer import get_sound_dim, get_sound_latent_fps
+
+        self.sound_dim = int(sound_dim_value if sound_dim_value is not None else get_sound_dim(od_config))
         action_gen_value = _od_config_get(od_config, "action_gen", None)
         action_dim_value = _od_config_get(od_config, "action_dim", None)
         if action_dim_value is None:
@@ -1065,12 +1075,13 @@ class Cosmos3VFMTransformer(nn.Module):
         self.action_gen = _as_bool(action_gen_value) if action_gen_value is not None else False
         self.action_dim = int(action_dim_value if action_dim_value is not None else 64)
         self.num_embodiment_domains = int(_od_config_get(od_config, "num_embodiment_domains", 32))
-        from .sound_tokenizer import get_sound_latent_fps
-
         self.sound_latent_fps = float(get_sound_latent_fps(od_config))
         if temporal_compression_factor is None:
             temporal_compression_factor = _tf_config_get(model_config, "temporal_compression_factor", 4)
         self.temporal_compression_factor = int(temporal_compression_factor)
+        self.temporal_compression_factor_sound = int(
+            _tf_config_get(model_config, "temporal_compression_factor_sound", 1)
+        )
         self.enable_fps_modulation = bool(_tf_config_get(model_config, "enable_fps_modulation", True))
         self.temporal_modality_margin = int(
             _tf_config_get(
@@ -1289,7 +1300,7 @@ class Cosmos3VFMTransformer(nn.Module):
                     temporal_offset=media_temporal_offset,
                     sound_latent_fps=self.sound_latent_fps,
                     base_fps=self.base_fps,
-                    base_temporal_compression_factor=self.temporal_compression_factor,
+                    temporal_compression_factor_sound=getattr(self, "temporal_compression_factor_sound", 1),
                     enable_fps_modulation=self.enable_fps_modulation,
                 )
                 gen_positions.append(s_pos)

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -24,12 +25,120 @@ DEFAULT_SOUND_CHANNELS = 2
 DEFAULT_SOUND_DIM = 64
 DEFAULT_SOUND_HOP_SIZE = 1920
 DEFAULT_SOUND_LATENT_FPS = DEFAULT_SOUND_SAMPLE_RATE / DEFAULT_SOUND_HOP_SIZE
+DEFAULT_SOUND_NORMALIZE_LATENTS = False
+DEFAULT_SOUND_NORMALIZATION_TYPE = "none"
+DEFAULT_SOUND_TANH_INPUT_SCALE = 1.5
+DEFAULT_SOUND_TANH_OUTPUT_SCALE = 3.5
+DEFAULT_SOUND_TANH_CLAMP = 0.995
 SOUND_TOKENIZER_COMPONENT_NAME = "sound_tokenizer"
 SOUND_TOKENIZER_CHECKPOINT_NAME = "model.safetensors"
 
 
 def _pipeline_args(od_config: OmniDiffusionConfig) -> dict[str, Any]:
     return dict(getattr(od_config, "custom_pipeline_args", None) or {})
+
+
+def _config_get(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    if isinstance(config, dict):
+        return config.get(key, default)
+    if hasattr(config, "get"):
+        value = config.get(key, None)
+        return default if value is None else value
+    return getattr(config, key, default)
+
+
+def _config_path_get(config: Any, *keys: str) -> Any:
+    value = config
+    for key in keys:
+        value = _config_get(value, key, None)
+        if value is None:
+            return None
+    return value
+
+
+def _sound_tokenizer_config_from(config: Any) -> Any:
+    """Return nested ``sound_tokenizer`` config from Cosmos3 config shapes."""
+    for path in (
+        ("sound_tokenizer",),
+        ("model", "config", "sound_tokenizer"),
+        ("config", "sound_tokenizer"),
+        ("model_config", "sound_tokenizer"),
+    ):
+        value = _config_path_get(config, *path)
+        if value is not None:
+            return value
+    return None
+
+
+def _nested_sound_tokenizer_configs(od_config: OmniDiffusionConfig | None) -> tuple[Any, ...]:
+    if od_config is None:
+        return ()
+    configs = []
+    for source in (
+        getattr(od_config, "model_config", None),
+        getattr(od_config, "tf_model_config", None),
+    ):
+        config = _sound_tokenizer_config_from(source)
+        if config is not None:
+            configs.append(config)
+    return tuple(configs)
+
+
+def _first_value_from_configs(configs: tuple[Any, ...], keys: tuple[str, ...]) -> Any:
+    for config in configs:
+        for key in keys:
+            value = _config_get(config, key, None)
+            if value is not None:
+                return value
+    return None
+
+
+def _top_level_model_value(od_config: OmniDiffusionConfig | None, keys: tuple[str, ...]) -> Any:
+    if od_config is None:
+        return None
+    for source in (
+        getattr(od_config, "model_config", None),
+        getattr(od_config, "tf_model_config", None),
+    ):
+        for key in keys:
+            for path in ((key,), ("model", "config", key), ("config", key), ("model_config", key)):
+                value = _config_path_get(source, *path)
+                if value is not None:
+                    return value
+    return None
+
+
+def _custom_arg_value(args: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = args.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _as_audio_channels(value: Any) -> int:
+    if isinstance(value, bool):
+        return 2 if value else 1
+    if isinstance(value, str) and value.strip().lower() in {
+        "1",
+        "0",
+        "true",
+        "false",
+        "yes",
+        "no",
+        "on",
+        "off",
+    }:
+        return 2 if _as_bool(value) else 1
+    return int(value)
 
 
 def _resolve_model_file(path: Any, model_root: str | None) -> str | None:
@@ -41,12 +150,97 @@ def _resolve_model_file(path: Any, model_root: str | None) -> str | None:
     return str(Path(model_root) / path)
 
 
+def _load_sound_tokenizer_component_config(config_path: str | None) -> dict[str, Any]:
+    if not config_path:
+        return {}
+    with open(config_path, encoding="utf-8") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        raise TypeError(f"Cosmos3 sound tokenizer config must be a JSON object, got {type(config)!r}.")
+    return config
+
+
+def _component_audio_channels(config: dict[str, Any]) -> Any:
+    if config.get("dec_out_channels") is not None:
+        return config["dec_out_channels"]
+    if config.get("audio_channels") is not None:
+        return config["audio_channels"]
+    if config.get("stereo") is not None:
+        return 2 if _as_bool(config["stereo"]) else 1
+    return None
+
+
+def _component_arch_values(config: dict[str, Any]) -> dict[str, Any]:
+    values = {
+        "sample_rate": config.get("sampling_rate", config.get("sample_rate")),
+        "audio_channels": _component_audio_channels(config),
+        "io_channels": config.get("vocoder_input_dim", config.get("io_channels", config.get("latent_ch"))),
+        "hop_size": config.get("hop_size"),
+    }
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _resolve_arch_value(
+    od_config: OmniDiffusionConfig,
+    args: dict[str, Any],
+    component_values: dict[str, Any],
+    *,
+    field: str,
+    custom_keys: tuple[str, ...],
+    nested_keys: tuple[str, ...],
+    top_level_keys: tuple[str, ...],
+    default: Any,
+    cast,
+) -> Any:
+    custom_value = _custom_arg_value(args, custom_keys)
+    component_value = component_values.get(field)
+    if component_value is not None:
+        resolved = cast(component_value)
+        if custom_value is not None and cast(custom_value) != resolved:
+            raise ValueError(
+                "Conflicting Cosmos3 sound tokenizer architecture override for "
+                f"{field}: component config has {resolved!r}, custom args have {cast(custom_value)!r}."
+            )
+        return resolved
+
+    if custom_value is not None:
+        return cast(custom_value)
+
+    nested_value = _first_value_from_configs(_nested_sound_tokenizer_configs(od_config), nested_keys)
+    if nested_value is not None:
+        return cast(nested_value)
+
+    top_value = _top_level_model_value(od_config, top_level_keys)
+    if top_value is not None:
+        return cast(top_value)
+
+    return cast(default)
+
+
+def _resolve_normalization_value(
+    od_config: OmniDiffusionConfig,
+    args: dict[str, Any],
+    *,
+    name: str,
+    default: Any,
+    aliases: tuple[str, ...] = (),
+) -> Any:
+    keys = (f"sound_{name}", name, *aliases)
+    custom_value = _custom_arg_value(args, keys)
+    if custom_value is not None:
+        return custom_value
+    nested_value = _first_value_from_configs(_nested_sound_tokenizer_configs(od_config), (name, *aliases))
+    return default if nested_value is None else nested_value
+
+
 def get_sound_config_value(
     od_config: OmniDiffusionConfig,
     name: str,
     default: Any,
     aliases: tuple[str, ...] = (),
 ) -> Any:
+    # Backward-compatible generic accessor.  Prefer the more specific helpers
+    # below for Cosmos3 sound tokenizer fields so precedence stays explicit.
     keys = (name, *aliases)
     for config in (
         _pipeline_args(od_config),
@@ -66,57 +260,86 @@ def get_sound_config_value(
 
 
 def get_sound_sample_rate(od_config: OmniDiffusionConfig) -> int:
-    return int(
-        get_sound_config_value(
-            od_config,
-            "sound_sample_rate",
-            DEFAULT_SOUND_SAMPLE_RATE,
-            ("sample_rate",),
-        )
+    args = _pipeline_args(od_config)
+    return _resolve_arch_value(
+        od_config,
+        args,
+        {},
+        field="sample_rate",
+        custom_keys=("sound_sample_rate", "sample_rate"),
+        nested_keys=("sample_rate", "sampling_rate"),
+        top_level_keys=("sound_sample_rate", "sample_rate"),
+        default=DEFAULT_SOUND_SAMPLE_RATE,
+        cast=int,
     )
 
 
 def get_sound_channels(od_config: OmniDiffusionConfig) -> int:
-    return int(
-        get_sound_config_value(
-            od_config,
-            "sound_audio_channels",
-            DEFAULT_SOUND_CHANNELS,
-            ("audio_channels",),
-        )
+    args = _pipeline_args(od_config)
+    return _resolve_arch_value(
+        od_config,
+        args,
+        {},
+        field="audio_channels",
+        custom_keys=("sound_audio_channels", "audio_channels", "stereo"),
+        nested_keys=("audio_channels", "dec_out_channels", "stereo"),
+        top_level_keys=("sound_audio_channels", "audio_channels", "stereo"),
+        default=DEFAULT_SOUND_CHANNELS,
+        cast=_as_audio_channels,
     )
 
 
 def get_sound_dim(od_config: OmniDiffusionConfig | None) -> int:
     if od_config is None:
         return DEFAULT_SOUND_DIM
-    return int(
-        get_sound_config_value(
-            od_config,
-            "sound_dim",
-            DEFAULT_SOUND_DIM,
-            ("io_channels", "latent_ch"),
-        )
+    args = _pipeline_args(od_config)
+    custom_value = _custom_arg_value(args, ("sound_dim", "io_channels", "latent_ch"))
+    if custom_value is not None:
+        return int(custom_value)
+    top_value = _top_level_model_value(od_config, ("sound_dim",))
+    if top_value is not None:
+        return int(top_value)
+    nested_value = _first_value_from_configs(
+        _nested_sound_tokenizer_configs(od_config),
+        ("io_channels", "vocoder_input_dim", "latent_ch"),
     )
+    return int(DEFAULT_SOUND_DIM if nested_value is None else nested_value)
 
 
 def get_sound_hop_size(od_config: OmniDiffusionConfig) -> int:
-    return int(
-        get_sound_config_value(
-            od_config,
-            "sound_hop_size",
-            DEFAULT_SOUND_HOP_SIZE,
-            ("hop_size",),
-        )
+    args = _pipeline_args(od_config)
+    return _resolve_arch_value(
+        od_config,
+        args,
+        {},
+        field="hop_size",
+        custom_keys=("sound_hop_size", "hop_size"),
+        nested_keys=("hop_size",),
+        top_level_keys=("sound_hop_size", "hop_size"),
+        default=DEFAULT_SOUND_HOP_SIZE,
+        cast=int,
     )
 
 
 def get_sound_latent_fps(od_config: OmniDiffusionConfig | None) -> float:
     if od_config is None:
         return DEFAULT_SOUND_LATENT_FPS
-    sample_rate = get_sound_sample_rate(od_config)
-    hop_size = get_sound_hop_size(od_config)
-    return float(get_sound_config_value(od_config, "sound_latent_fps", sample_rate / hop_size))
+    args = _pipeline_args(od_config)
+    custom_value = _custom_arg_value(args, ("sound_latent_fps",))
+    if custom_value is not None:
+        return float(custom_value)
+    top_value = _top_level_model_value(od_config, ("sound_latent_fps",))
+    if top_value is not None:
+        return float(top_value)
+    nested_configs = _nested_sound_tokenizer_configs(od_config)
+    nested_fps = _first_value_from_configs(nested_configs, ("sound_latent_fps", "latent_fps"))
+    if nested_fps is not None:
+        return float(nested_fps)
+    sample_rate = _first_value_from_configs(nested_configs, ("sample_rate", "sampling_rate"))
+    hop_size = _first_value_from_configs(nested_configs, ("hop_size",))
+    if sample_rate is not None and hop_size is not None:
+        return float(sample_rate) / float(hop_size)
+    return float(DEFAULT_SOUND_LATENT_FPS)
 
 
 class Cosmos3SoundTokenizer:
@@ -172,15 +395,97 @@ class Cosmos3SoundTokenizer:
                 "sound_tokenizer/model.safetensors under the model path."
             )
 
-        sample_rate = get_sound_sample_rate(od_config)
-        audio_channels = get_sound_channels(od_config)
-        sound_dim = get_sound_dim(od_config)
-        hop_size = get_sound_hop_size(od_config)
-
         config_path = _resolve_model_file(explicit_config_path, model_root)
         if config_path is None and model_root:
             candidate = Path(model_root) / SOUND_TOKENIZER_COMPONENT_NAME / "config.json"
             config_path = str(candidate) if candidate.exists() else None
+        component_config = _load_sound_tokenizer_component_config(config_path)
+        component_values = _component_arch_values(component_config)
+
+        sample_rate = _resolve_arch_value(
+            od_config,
+            args,
+            component_values,
+            field="sample_rate",
+            custom_keys=("sound_sample_rate", "sample_rate"),
+            nested_keys=("sample_rate", "sampling_rate"),
+            top_level_keys=("sound_sample_rate", "sample_rate"),
+            default=DEFAULT_SOUND_SAMPLE_RATE,
+            cast=int,
+        )
+        audio_channels = _resolve_arch_value(
+            od_config,
+            args,
+            component_values,
+            field="audio_channels",
+            custom_keys=("sound_audio_channels", "audio_channels", "stereo"),
+            nested_keys=("audio_channels", "dec_out_channels", "stereo"),
+            top_level_keys=("sound_audio_channels", "audio_channels", "stereo"),
+            default=DEFAULT_SOUND_CHANNELS,
+            cast=_as_audio_channels,
+        )
+        sound_dim = _resolve_arch_value(
+            od_config,
+            args,
+            component_values,
+            field="io_channels",
+            custom_keys=("sound_dim", "io_channels", "latent_ch"),
+            nested_keys=("io_channels", "vocoder_input_dim", "latent_ch"),
+            top_level_keys=("sound_dim",),
+            default=DEFAULT_SOUND_DIM,
+            cast=int,
+        )
+        hop_size = _resolve_arch_value(
+            od_config,
+            args,
+            component_values,
+            field="hop_size",
+            custom_keys=("sound_hop_size", "hop_size"),
+            nested_keys=("hop_size",),
+            top_level_keys=("sound_hop_size", "hop_size"),
+            default=DEFAULT_SOUND_HOP_SIZE,
+            cast=int,
+        )
+        normalize_latents = _as_bool(
+            _resolve_normalization_value(
+                od_config,
+                args,
+                name="normalize_latents",
+                default=DEFAULT_SOUND_NORMALIZE_LATENTS,
+            )
+        )
+        normalization_type = str(
+            _resolve_normalization_value(
+                od_config,
+                args,
+                name="normalization_type",
+                default=DEFAULT_SOUND_NORMALIZATION_TYPE,
+            )
+        )
+        tanh_input_scale = float(
+            _resolve_normalization_value(
+                od_config,
+                args,
+                name="tanh_input_scale",
+                default=DEFAULT_SOUND_TANH_INPUT_SCALE,
+            )
+        )
+        tanh_output_scale = float(
+            _resolve_normalization_value(
+                od_config,
+                args,
+                name="tanh_output_scale",
+                default=DEFAULT_SOUND_TANH_OUTPUT_SCALE,
+            )
+        )
+        tanh_clamp = float(
+            _resolve_normalization_value(
+                od_config,
+                args,
+                name="tanh_clamp",
+                default=DEFAULT_SOUND_TANH_CLAMP,
+            )
+        )
         tokenizer = Cosmos3AVAEAudioTokenizer(
             checkpoint_path=str(avae_path),
             config_path=config_path,
@@ -188,11 +493,11 @@ class Cosmos3SoundTokenizer:
             audio_channels=audio_channels,
             io_channels=sound_dim,
             hop_size=hop_size,
-            normalize_latents=bool(args.get("sound_normalize_latents", True)),
-            normalization_type=args.get("sound_normalization_type", "none"),
-            tanh_input_scale=float(args.get("sound_tanh_input_scale", 1.5)),
-            tanh_output_scale=float(args.get("sound_tanh_output_scale", 3.5)),
-            tanh_clamp=float(args.get("sound_tanh_clamp", 0.995)),
+            normalize_latents=normalize_latents,
+            normalization_type=normalization_type,
+            tanh_input_scale=tanh_input_scale,
+            tanh_output_scale=tanh_output_scale,
+            tanh_clamp=tanh_clamp,
             dtype=getattr(od_config, "dtype", torch.bfloat16),
             device=get_local_device(),
         )

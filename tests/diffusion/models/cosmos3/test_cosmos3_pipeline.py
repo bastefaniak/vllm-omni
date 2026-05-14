@@ -367,13 +367,10 @@ class TestPipelineHelpers:
         class FakeSoundTokenizer:
             sample_rate = 10
             latent_ch = 3
-
-            def get_latent_num_samples(self, samples: int) -> int:
-                assert samples == 20
-                return 5
+            hop_size = 4
 
             def decode(self, latents: torch.Tensor) -> torch.Tensor:
-                return torch.ones(latents.shape[0], 2, 7)
+                return torch.ones(latents.shape[0], 2, 24)
 
         pipeline._sound_tokenizer = FakeSoundTokenizer()
 
@@ -383,15 +380,15 @@ class TestPipelineHelpers:
             frame_rate=3.0,
         )
         latents, latent_frames = pipeline._prepare_sound_latents(
-            target_samples,
+            21,
             torch.Generator(device="cpu").manual_seed(0),
         )
-        audio = pipeline._decode_sound_latents(torch.zeros(1, 3, 5), target_audio_samples=5)
+        audio = pipeline._decode_sound_latents(torch.zeros(1, 3, 6), target_audio_samples=21)
 
         assert (target_samples, duration, sample_rate) == (20, 2.0, 10)
-        assert latents.shape == (1, 3, 5)
-        assert latent_frames == 5
-        assert audio.shape == (1, 2, 5)
+        assert latents.shape == (1, 3, 6)
+        assert latent_frames == 6
+        assert audio.shape == (1, 2, 21)
 
     def test_init_eagerly_loads_sound_tokenizer_when_transformer_supports_sound(
         self,
@@ -781,6 +778,7 @@ class TestForwardRouting:
         assert captured["flow_shifts"] == [3.0]
         assert captured["scheduler_steps"] == [50, 50]
         assert captured["format"]["is_t2i"] is True
+        assert captured["format"]["negative_prompt"] == ""
         assert captured["format"]["height"] == 1024
         assert captured["format"]["width"] == 1024
         assert captured["format"]["num_frames"] == 1
@@ -789,6 +787,8 @@ class TestForwardRouting:
         assert output.output["image"].shape[0] == 2
 
     def test_forward_uses_t2v_defaults_and_engine_flow_shift(self, make_cosmos3_pipeline) -> None:
+        from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import COSMOS3_T2V_NEGATIVE_PROMPT
+
         pipeline = make_cosmos3_pipeline()
         captured = self._install_forward_stubs(pipeline)
         req = SimpleNamespace(
@@ -801,9 +801,11 @@ class TestForwardRouting:
         assert captured["flow_shifts"] == [1.0]
         assert captured["scheduler_steps"] == [35]
         assert captured["format"]["is_t2i"] is False
+        assert captured["format"]["negative_prompt"] == COSMOS3_T2V_NEGATIVE_PROMPT
         assert captured["format"]["height"] == 720
         assert captured["format"]["width"] == 1280
-        assert captured["format"]["num_frames"] == 81
+        assert captured["format"]["num_frames"] == 189
+        assert captured["diffuse_calls"][0]["guidance_scale"] == 6.0
         assert captured["diffuse_calls"][0]["guidance_interval"] is None
 
     def test_forward_defaults_to_video_without_modalities(self, make_cosmos3_pipeline) -> None:
@@ -818,6 +820,28 @@ class TestForwardRouting:
 
         assert captured["format"]["is_t2i"] is False
         assert "video" in output.output
+
+    def test_forward_flow_shifts_do_not_leak_between_t2v_and_t2i(
+        self,
+        make_cosmos3_pipeline,
+    ) -> None:
+        pipeline = make_cosmos3_pipeline()
+        captured = self._install_forward_stubs(pipeline)
+
+        pipeline.forward(
+            SimpleNamespace(
+                prompts=[{"prompt": "A warehouse robot", "modalities": ["video"]}],
+                sampling_params=make_sampling_params(),
+            )
+        )
+        pipeline.forward(
+            SimpleNamespace(
+                prompts=[{"prompt": "A painted robot", "modalities": ["image"]}],
+                sampling_params=make_sampling_params(),
+            )
+        )
+
+        assert captured["flow_shifts"] == [1.0, 3.0]
 
     def test_forward_selects_i2v_latents_for_image_conditioning(self, make_cosmos3_pipeline) -> None:
         pipeline = make_cosmos3_pipeline()
@@ -887,6 +911,7 @@ class TestForwardRouting:
 
         output = pipeline.forward(req)
 
+        assert captured["format"]["negative_prompt"] == ""
         diffuse_call = captured["diffuse_calls"][0]
         assert diffuse_call["action_latents"].shape == (1, 2, 4)
         assert diffuse_call["action_velocity_mask"].tolist() == [[[1.0], [1.0]]]

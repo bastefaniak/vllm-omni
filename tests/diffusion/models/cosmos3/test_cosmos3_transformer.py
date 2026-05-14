@@ -71,15 +71,14 @@ def test_compute_mrope_position_ids_sound_uses_sound_latent_fps() -> None:
     ids, next_offset = compute_mrope_position_ids_sound(
         grid_t=3,
         temporal_offset=10,
-        sound_latent_fps=24.0,
+        sound_latent_fps=25.0,
         base_fps=24.0,
-        base_temporal_compression_factor=4,
     )
 
-    torch.testing.assert_close(ids[0], torch.tensor([10.0, 10.25, 10.5]))
+    torch.testing.assert_close(ids[0], torch.tensor([10.0, 10.96, 11.92]))
     assert ids[1].tolist() == [0.0, 0.0, 0.0]
     assert ids[2].tolist() == [0.0, 0.0, 0.0]
-    assert next_offset == 11
+    assert next_offset == 12
 
 
 def test_compute_mrope_position_ids_action_uses_start_frame_offset() -> None:
@@ -96,6 +95,24 @@ def test_compute_mrope_position_ids_action_uses_start_frame_offset() -> None:
 
     assert ids.tolist() == [[11, 12, 13], [0, 0, 0], [0, 0, 0]]
     assert next_offset == 14
+
+
+def test_compute_mrope_position_ids_action_keeps_video_base_temporal_compression() -> None:
+    from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import (
+        compute_mrope_position_ids_action,
+    )
+
+    ids, next_offset = compute_mrope_position_ids_action(
+        grid_t=3,
+        temporal_offset=10,
+        action_fps=24.0,
+        base_fps=24.0,
+        base_temporal_compression_factor=4,
+        start_frame_offset=0,
+    )
+
+    torch.testing.assert_close(ids[0], torch.tensor([10.0, 10.25, 10.5]))
+    assert next_offset == 11
 
 
 @pytest.mark.parametrize(
@@ -203,6 +220,14 @@ def test_sound_modules_created_only_when_sound_config_present() -> None:
             dtype=torch.float32,
         )
     )
+    with_nested_sound_dim = Cosmos3VFMTransformer(
+        SimpleNamespace(
+            tf_model_config={**tiny, "sound_gen": True},
+            model_config={"sound_tokenizer": {"io_channels": 5}},
+            custom_pipeline_args={},
+            dtype=torch.float32,
+        )
+    )
 
     assert no_sound.sound_gen is False
     assert not hasattr(no_sound, "sound2llm")
@@ -212,6 +237,8 @@ def test_sound_modules_created_only_when_sound_config_present() -> None:
     assert with_sound.sound2llm.in_features == 3
     assert with_sound.llm2sound.out_features == 3
     assert tuple(with_sound.sound_modality_embed.shape) == (8,)
+    assert with_nested_sound_dim.sound_dim == 5
+    assert with_nested_sound_dim.sound2llm.in_features == 5
 
 
 def test_action_modules_created_only_when_action_config_present() -> None:
@@ -251,7 +278,8 @@ def test_sound_latent_fps_derives_from_sound_tokenizer_config() -> None:
     derived = Cosmos3VFMTransformer(
         SimpleNamespace(
             tf_model_config=tiny,
-            custom_pipeline_args={"sound_sample_rate": 32000, "sound_hop_size": 800},
+            model_config={"sound_tokenizer": {"sample_rate": 32000, "hop_size": 800}},
+            custom_pipeline_args={},
             dtype=torch.float32,
         )
     )
@@ -471,7 +499,8 @@ def test_compute_rope_freqs_appends_sound_positions_after_vision() -> None:
     model.base_fps = 24.0
     model.temporal_compression_factor = 4
     model.enable_fps_modulation = True
-    model.sound_latent_fps = 24.0
+    model.temporal_compression_factor_sound = 1
+    model.sound_latent_fps = 25.0
 
     model._compute_rope_freqs(
         text_mask=torch.tensor([[1, 1]], dtype=torch.long),
@@ -488,7 +517,7 @@ def test_compute_rope_freqs_appends_sound_positions_after_vision() -> None:
     assert gen_pos.shape == (3, 1, 5)
     torch.testing.assert_close(
         gen_pos[0, 0],
-        torch.tensor([102.0, 103.0, 102.0, 102.25, 102.5]),
+        torch.tensor([102.0, 103.0, 102.0, 102.96, 103.92]),
     )
 
 
@@ -514,7 +543,8 @@ def test_compute_rope_freqs_appends_action_positions_between_vision_and_sound() 
     model.base_fps = 24.0
     model.temporal_compression_factor = 4
     model.enable_fps_modulation = False
-    model.sound_latent_fps = 24.0
+    model.temporal_compression_factor_sound = 1
+    model.sound_latent_fps = 25.0
 
     model._compute_rope_freqs(
         text_mask=torch.tensor([[1, 1]], dtype=torch.long),
@@ -556,7 +586,8 @@ def test_compute_rope_freqs_promotes_mixed_video_sound_position_dtypes() -> None
     model.base_fps = 24.0
     model.temporal_compression_factor = 4
     model.enable_fps_modulation = True
-    model.sound_latent_fps = 24.0
+    model.temporal_compression_factor_sound = 1
+    model.sound_latent_fps = 25.0
 
     model._compute_rope_freqs(
         text_mask=torch.tensor([[1, 1]], dtype=torch.long),
@@ -573,5 +604,5 @@ def test_compute_rope_freqs_promotes_mixed_video_sound_position_dtypes() -> None
     assert gen_pos.dtype == torch.float32
     torch.testing.assert_close(
         gen_pos[0, 0],
-        torch.tensor([102.0, 102.0, 102.25, 102.5]),
+        torch.tensor([102.0, 102.0, 102.96, 103.92]),
     )

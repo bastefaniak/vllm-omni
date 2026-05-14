@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -45,13 +46,13 @@ def _default_avae_config(
             "enc_hop_length": 16,
             "enc_latent_dim": 128,
             "enc_c_mults": [1, 2, 4],
-            "enc_strides": [4, 4, 8],
+            "enc_strides": [4, 5, 6],
             "enc_identity_init": False,
             "enc_use_snake": True,
             "dec_type": "oobleck",
             "dec_dim": 320,
             "dec_c_mults": [1, 2, 4, 8, 16],
-            "dec_strides": [2, 4, 4, 8, 8],
+            "dec_strides": [2, 4, 5, 6, 8],
             "dec_use_snake": True,
             "dec_final_tanh": False,
             "dec_out_channels": audio_channels,
@@ -154,7 +155,7 @@ class Cosmos3AVAEAudioTokenizer(nn.Module):
         audio_channels: int = 2,
         io_channels: int = 64,
         hop_size: int = 1920,
-        normalize_latents: bool = True,
+        normalize_latents: bool = False,
         normalization_type: str = "none",
         tanh_input_scale: float = 1.5,
         tanh_output_scale: float = 3.5,
@@ -185,6 +186,18 @@ class Cosmos3AVAEAudioTokenizer(nn.Module):
             io_channels=self.latent_ch,
             hop_size=self.hop_size,
         )
+        self.sample_rate = int(config.sampling_rate)
+        self.audio_channels = int(
+            getattr(config, "dec_out_channels", 2 if bool(getattr(config, "stereo", True)) else 1)
+        )
+        self.latent_ch = int(config.vocoder_input_dim)
+        self.hop_size = int(config.hop_size)
+        dec_stride_product = math.prod(int(stride) for stride in config.dec_strides)
+        if dec_stride_product != self.hop_size:
+            raise ValueError(
+                "Cosmos3 AVAE config dec_strides product must equal hop_size "
+                f"for correct latent/audio duration math: product={dec_stride_product}, hop_size={self.hop_size}."
+            )
         self.model = load_generator(config.model_type, config, self.device)
         state_dict = _strip_prefixes(
             _load_checkpoint(checkpoint_path, self.device),

@@ -15,6 +15,7 @@ runtime by:
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections.abc import Iterable
@@ -62,6 +63,16 @@ from .transformer_cosmos3 import Cosmos3VFMTransformer
 logger = init_logger(__name__)
 
 COSMOS3_DEFAULT_NEGATIVE_PROMPT = ""
+COSMOS3_VIDEO_NEGATIVE_PROMPT = (
+    "The video captures a series of frames showing ugly scenes, static with no motion, motion blur, "
+    "over-saturation, shaky footage, low resolution, grainy texture, pixelated images, poorly lit areas, "
+    "underexposed and overexposed scenes, poor color balance, washed out colors, choppy sequences, "
+    "jerky movements, low frame rate, artifacting, color banding, unnatural transitions, outdated special effects, "
+    "fake elements, unconvincing visuals, poorly edited content, jump cuts, visual noise, and flickering. "
+    "Overall, the video is of poor quality."
+)
+COSMOS3_T2V_NEGATIVE_PROMPT = COSMOS3_VIDEO_NEGATIVE_PROMPT
+COSMOS3_I2V_NEGATIVE_PROMPT = COSMOS3_VIDEO_NEGATIVE_PROMPT
 COSMOS3_DURATION_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 COSMOS3_RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 COSMOS3_IMAGE_RESOLUTION_TEMPLATE = "This image is of {height}x{width} resolution."
@@ -428,12 +439,6 @@ class Cosmos3OmniDiffusersPipeline(
         # scheduler at request time when a per-request flow_shift override
         # is supplied (T2I uses shift=3.0; T2V/I2V use the engine default).
         self._base_scheduler_config = self.scheduler.config
-        # ``_engine_init_flow_shift`` is the shift the engine was configured
-        # with at init time (after the optional ``od_config.flow_shift``
-        # override).  This is the value T2V/I2V requests fall back to.
-        # ``_current_flow_shift`` tracks the shift the scheduler *currently*
-        # uses, since per-request rebuilds in ``_set_flow_shift`` must be
-        # detectable on the next request to restore the prior shift.
         self._engine_init_flow_shift = float(getattr(self.scheduler.config, "flow_shift", 1.0) or 1.0)
         self._current_flow_shift = self._engine_init_flow_shift
 
@@ -890,7 +895,11 @@ class Cosmos3OmniDiffusersPipeline(
         generator: torch.Generator,
     ) -> tuple[torch.Tensor, int]:
         sound_tokenizer = self._get_sound_tokenizer()
-        latent_frames = max(1, int(sound_tokenizer.get_latent_num_samples(max(1, target_audio_samples))))
+        hop_size = int(
+            getattr(sound_tokenizer, "hop_size", None)
+            or getattr(sound_tokenizer, "temporal_compression_factor")
+        )
+        latent_frames = max(1, math.ceil(max(1, int(target_audio_samples)) / hop_size))
         sound_dim = int(getattr(sound_tokenizer, "latent_ch", 64))
         transformer_sound_dim = int(getattr(self.transformer, "sound_dim", sound_dim))
         if sound_dim != transformer_sound_dim:
@@ -1527,12 +1536,12 @@ class Cosmos3OmniDiffusersPipeline(
         prompt_data = req.prompts[0]
         if isinstance(prompt_data, str):
             prompt = prompt_data
-            negative_prompt = COSMOS3_DEFAULT_NEGATIVE_PROMPT
+            negative_prompt = None
             image_tensor = None
             action_video_tensor = None
         else:
             prompt = prompt_data.get("prompt", "")
-            negative_prompt = prompt_data.get("negative_prompt", COSMOS3_DEFAULT_NEGATIVE_PROMPT)
+            negative_prompt = prompt_data.get("negative_prompt")
             additional_info = prompt_data.get("additional_information", {}) or {}
             image_tensor = additional_info.get("preprocessed_image")
             action_video_tensor = additional_info.get("preprocessed_video")
@@ -1563,6 +1572,14 @@ class Cosmos3OmniDiffusersPipeline(
                 "initialized without sound modules. Check that the checkpoint config "
                 "enables sound_gen or defines sound_dim and includes sound weights."
             )
+        is_i2v = image_tensor is not None and not is_t2i and not action_enabled
+        if negative_prompt is None:
+            if is_t2i or action_enabled:
+                negative_prompt = COSMOS3_DEFAULT_NEGATIVE_PROMPT
+            elif is_i2v:
+                negative_prompt = COSMOS3_I2V_NEGATIVE_PROMPT
+            else:
+                negative_prompt = COSMOS3_T2V_NEGATIVE_PROMPT
 
         # T2I and T2V share the same model + forward path; only defaults
         # differ:
@@ -1580,9 +1597,9 @@ class Cosmos3OmniDiffusersPipeline(
         else:
             height = sp.height or 720
             width = sp.width or 1280
-            num_frames = sp.num_frames or 81
+            num_frames = sp.num_frames or 189
             num_inference_steps = sp.num_inference_steps or 35
-            guidance_scale = sp.guidance_scale if sp.guidance_scale else 4.0
+            guidance_scale = sp.guidance_scale if sp.guidance_scale else 6.0
             # Fall back to the engine-init shift, NOT None: passing None
             # to ``_set_flow_shift`` would leak a prior T2I rebuild
             # (shift=3.0) into a subsequent video request.
