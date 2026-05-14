@@ -85,16 +85,26 @@ def _pack_tensor_if_large(val: torch.Tensor) -> torch.Tensor | dict:
     return val
 
 
+def _pack_value_if_large(val: object) -> object:
+    if isinstance(val, torch.Tensor):
+        return _pack_tensor_if_large(val)
+    if isinstance(val, dict):
+        return {key: _pack_value_if_large(value) for key, value in val.items()}
+    return val
+
+
 def _unpack_if_shm_handle(val: object) -> object:
     """Reconstruct a tensor from an SHM handle dict, or return as-is."""
     if isinstance(val, dict) and val.get("__tensor_shm__"):
         return _tensor_from_shm(val)
+    if isinstance(val, dict):
+        return {key: _unpack_if_shm_handle(value) for key, value in val.items()}
     return val
 
 
 def _pack_diffusion_fields(output: DiffusionOutput) -> DiffusionOutput:
-    if output.output is not None and isinstance(output.output, torch.Tensor):
-        output.output = _pack_tensor_if_large(output.output)
+    if output.output is not None:
+        output.output = _pack_value_if_large(output.output)
     if output.trajectory_latents is not None and isinstance(output.trajectory_latents, torch.Tensor):
         output.trajectory_latents = _pack_tensor_if_large(output.trajectory_latents)
     if output.trajectory_timesteps is not None and isinstance(output.trajectory_timesteps, torch.Tensor):

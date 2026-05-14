@@ -91,6 +91,8 @@ class SDPAImpl(AttentionImpl):
         self.softmax_scale = softmax_scale
         if backend_kwargs:
             logger.warning("SDPAImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
 
     def _forward_impl(
         self,
@@ -115,6 +117,7 @@ class SDPAImpl(AttentionImpl):
             dropout_p=0.0,
             is_causal=self.causal,
             scale=self.softmax_scale,
+            enable_gqa=self.num_heads != self.num_kv_heads,
         )
         out = output.permute(0, 2, 1, 3)
         return out

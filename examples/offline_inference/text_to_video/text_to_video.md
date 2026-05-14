@@ -9,6 +9,7 @@ A unified script for text-to-video generation. Supports multiple models with mod
 | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | 720x1280 | 81 | 40 | 4.0 | ~60 GiB |
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v` | 480x832 | 121 | 50 | 6.0 | 1×A100 80GB |
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v` | 720x1280 | 121 | 50 | 6.0 | FP8 + VAE tiling required |
+| `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` | 720x1280 | 81 | 35 | 4.0 | model/checkpoint dependent |
 
 ## Local CLI Usage
 
@@ -44,6 +45,28 @@ python text_to_video.py \
   --frame-rate 24 \
   --output ltx2_out.mp4
 ```
+
+### Cosmos3
+
+Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
+
+```bash
+export COSMOS3_MODEL=/path/to/cosmos3-diffusers
+
+python text_to_video.py \
+  --model "$COSMOS3_MODEL" \
+  --prompt "A small warehouse robot moves a blue box across a clean floor." \
+  --negative-prompt "blurry, distorted, low quality" \
+  --height 720 \
+  --width 1280 \
+  --num-frames 81 \
+  --guidance-scale 4.0 \
+  --num-inference-steps 35 \
+  --fps 24 \
+  --output cosmos3_t2v_output.mp4
+```
+
+Cosmos3 video generation currently supports one prompt and one video per request. The implementation supports `--cache-backend cache_dit`, `--cfg-parallel-size 2`, `--ulysses-degree`, `--tensor-parallel-size`, `--use-hsdp`, and `--enable-layerwise-offload`. Do not use `--enable-cpu-offload`; Cosmos3 does not support model-level CPU offload.
 
 ### HunyuanVideo-1.5 (480p)
 
@@ -122,6 +145,7 @@ python text_to_video.py \
 - `--audio-sample-rate`: audio sample rate for embedded audio (when the pipeline returns audio).
 - `--quantization`: quantization method (`fp8` for FP8, `gguf` for GGUF).
 - `--flow-shift`: scheduler flow_shift parameter.
+- `--cache-backend`: `cache_dit` for supported models.
 
 ### Wan2.2-specific
 

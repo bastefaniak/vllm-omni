@@ -33,6 +33,7 @@ class OmniTextPrompt(TextPrompt):
     """
 
     negative_prompt: NotRequired[str]
+    modalities: NotRequired[list[str]]
     prompt_embeds: NotRequired[torch.Tensor]
     negative_prompt_embeds: NotRequired[torch.Tensor]
     additional_information: NotRequired[dict[str, Any]]

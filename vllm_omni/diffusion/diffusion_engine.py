@@ -83,6 +83,18 @@ def supports_audio_output(model_class_name: str) -> bool:
     return bool(getattr(model_cls, "support_audio_output", False))
 
 
+def _move_tensor_tree_to_cpu(value: object) -> object:
+    if isinstance(value, torch.Tensor):
+        return value.cpu() if value.device.type != "cpu" else value
+    if isinstance(value, dict):
+        return {key: _move_tensor_tree_to_cpu(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_move_tensor_tree_to_cpu(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_move_tensor_tree_to_cpu(item) for item in value)
+    return value
+
+
 def get_extra_body_params(model_class_name: str) -> frozenset[str]:
     """Return the set of extra_body keys accepted by a pipeline.
 
@@ -223,12 +235,8 @@ class DiffusionEngine:
         # post-processing to avoid device OOM — model weights may still
         # reside on the device and leave no headroom for intermediates.
         output_data = output.output
-        if (
-            self.od_config.enable_cpu_offload
-            and isinstance(output_data, torch.Tensor)
-            and output_data.device.type != "cpu"
-        ):
-            output_data = output_data.cpu()
+        if self.od_config.enable_cpu_offload:
+            output_data = _move_tensor_tree_to_cpu(output_data)
 
         postprocess_start_time = time.perf_counter()
         if self.post_process_func is not None:
@@ -249,7 +257,10 @@ class DiffusionEngine:
             custom_output.update(outputs.get("custom_output") or {})
             model_audio_sample_rate = outputs.get("audio_sample_rate")
             model_fps = outputs.get("fps")
-            outputs = outputs.get("video", outputs)
+            if "image" in outputs:
+                outputs = outputs["image"]
+            elif "video" in outputs:
+                outputs = outputs["video"]
         postprocess_time = time.perf_counter() - postprocess_start_time
         logger.debug("Post-processing completed in %.4f seconds", postprocess_time)
 

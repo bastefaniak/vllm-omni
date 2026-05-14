@@ -18,6 +18,7 @@ SEPARATE_CFG_ENABLERS = [
     cd_backend.enable_cache_for_ltx2,
     cd_backend.enable_cache_for_wan22,
     cd_backend.enable_cache_for_longcat_image,
+    cd_backend.enable_cache_for_cosmos3,
 ]
 
 SAMPLE_CACHE_CONFIG = DiffusionCacheConfig()
@@ -38,3 +39,21 @@ def test_separate_cfg(mock_cache_dit, mock_block_adapter, enabler):
     mock_cache_dit.enable_cache.assert_called_once()
     adapter_kwargs = mock_block_adapter.call_args.kwargs
     assert adapter_kwargs["has_separate_cfg"] is True
+
+
+@patch("vllm_omni.diffusion.cache.cache_dit_backend.BlockAdapter")
+@patch("vllm_omni.diffusion.cache.cache_dit_backend.cache_dit")
+def test_cosmos3_cache_dit_wraps_gen_layers(mock_cache_dit, mock_block_adapter):
+    """Cosmos3 should cache only the repeated GEN pathway blocks."""
+    mock_pipeline = Mock()
+    gen_layers = object()
+    mock_pipeline.transformer.gen_layers = gen_layers
+
+    cd_backend.enable_cache_for_cosmos3(mock_pipeline, SAMPLE_CACHE_CONFIG)
+
+    mock_cache_dit.enable_cache.assert_called_once()
+    adapter_kwargs = mock_block_adapter.call_args.kwargs
+    assert adapter_kwargs["transformer"] is mock_pipeline.transformer
+    assert adapter_kwargs["blocks"] == [gen_layers]
+    assert adapter_kwargs["has_separate_cfg"] is True
+    assert adapter_kwargs["check_forward_pattern"] is False

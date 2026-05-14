@@ -495,6 +495,7 @@ def test_generate_single_image(test_client):
     img_bytes = base64.b64decode(data["data"][0]["b64_json"])
     img = Image.open(io.BytesIO(img_bytes))
     assert img.size == (64, 64)  # Our mock returns 64x64 images
+    assert test_client.app.state.engine_client.captured_prompt["modalities"] == ["image"]
 
 
 def test_generate_images_async_omni_sampling_params(async_omni_test_client):

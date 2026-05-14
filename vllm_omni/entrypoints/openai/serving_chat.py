@@ -2450,6 +2450,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         gen_prompt: OmniTextPrompt = {
             "prompt": prompt,
             "negative_prompt": negative_prompt,
+            "modalities": ["image"],
         }
         if pil_images:
             if len(pil_images) == 1:
@@ -2621,6 +2622,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             gen_prompt: OmniTextPrompt = {
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
+                "modalities": ["image"],
             }
             gen_params = OmniDiffusionSamplingParams(
                 height=height,

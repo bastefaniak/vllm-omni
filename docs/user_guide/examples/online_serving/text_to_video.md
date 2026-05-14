@@ -13,6 +13,7 @@ This example demonstrates how to deploy text-to-video models for online video ge
 | Wan2.1 T2V (14B) | `Wan-AI/Wan2.1-T2V-14B-Diffusers` |
 | Wan2.2 T2V | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` |
 | LTX-2 | `Lightricks/LTX-2` |
+| Cosmos3 T2V | `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` |
 
 ## Wan2.2 T2V
 
@@ -39,6 +40,23 @@ The script allows overriding:
 - `FLOW_SHIFT` (default: `5.0`)
 - `CACHE_BACKEND` (default: `none`)
 - `ENABLE_CACHE_DIT_SUMMARY` (default: `0`)
+
+## Cosmos3 T2V
+
+Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
+
+### Start Server
+
+```bash
+export COSMOS3_MODEL=/path/to/cosmos3-diffusers
+
+vllm serve "$COSMOS3_MODEL" \
+  --omni \
+  --port 8091 \
+  --model-class-name Cosmos3OmniDiffusersPipeline
+```
+
+Use `--enable-layerwise-offload`, `--cache-backend cache_dit`, `--cfg-parallel-size 2`, `--usp`, `--tensor-parallel-size`, or `--use-hsdp` as needed. Do not use `--enable-cpu-offload`; Cosmos3 does not support model-level CPU offload.
 
 ## Async Job Behavior
 
@@ -83,6 +101,51 @@ curl -X POST http://localhost:8091/v1/videos/sync \
   -F "flow_shift=5.0" \
   -F "seed=42" \
   -o sync_t2v_output.mp4
+```
+
+### Cosmos3 Sync Request
+
+```bash
+curl -X POST http://localhost:8091/v1/videos/sync \
+  -F "prompt=A small warehouse robot moves a blue box across a clean floor." \
+  -F "negative_prompt=blurry, distorted, low quality" \
+  -F "size=1280x720" \
+  -F "num_frames=81" \
+  -F "fps=24" \
+  -F "num_inference_steps=35" \
+  -F "guidance_scale=4.0" \
+  -F "seed=42" \
+  -o cosmos3_t2v_output.mp4
+```
+
+For async generation, send the same form fields to `POST /v1/videos`, poll `GET /v1/videos/{video_id}`, and download from `GET /v1/videos/{video_id}/content`. Cosmos3 currently supports one prompt and one video per request.
+
+```bash
+create_response=$(curl -s http://localhost:8091/v1/videos \
+  -H "Accept: application/json" \
+  -F "prompt=A small warehouse robot moves a blue box across a clean floor." \
+  -F "negative_prompt=blurry, distorted, low quality" \
+  -F "size=1280x720" \
+  -F "num_frames=81" \
+  -F "fps=24" \
+  -F "num_inference_steps=35" \
+  -F "guidance_scale=4.0" \
+  -F "seed=42")
+
+video_id=$(echo "$create_response" | jq -r '.id')
+while true; do
+  status=$(curl -s "http://localhost:8091/v1/videos/${video_id}" | jq -r '.status')
+  if [ "$status" = "completed" ]; then
+    break
+  fi
+  if [ "$status" = "failed" ]; then
+    echo "Video generation failed"
+    exit 1
+  fi
+  sleep 2
+done
+
+curl -L "http://localhost:8091/v1/videos/${video_id}/content" -o cosmos3_t2v_output.mp4
 ```
 
 ## Storage
@@ -153,6 +216,7 @@ curl -X POST http://localhost:8091/v1/videos \
 ### Generation with Parameters
 
 ```bash
+# Note: frame interpolation specific arguments are relevant only for Wan2.2 models
 curl -X POST http://localhost:8091/v1/videos \
   -F "prompt=A cinematic view of a futuristic city at sunset" \
   -F "width=832" \
@@ -173,32 +237,32 @@ curl -X POST http://localhost:8091/v1/videos \
 
 ## Generation Parameters
 
-| Parameter             | Type   | Default | Description                                      |
-| --------------------- | ------ | ------- | ------------------------------------------------ |
-| `prompt`              | str    | -       | Text description of the desired video            |
-| `seconds`             | str    | None    | Clip duration in seconds                         |
-| `size`                | str    | None    | Output size in `WIDTHxHEIGHT` format             |
-| `negative_prompt`     | str    | None    | Negative prompt                                  |
-| `width`               | int    | None    | Video width in pixels                            |
-| `height`              | int    | None    | Video height in pixels                           |
-| `num_frames`          | int    | None    | Number of frames to generate                     |
-| `fps`                 | int    | None    | Frames per second for output video               |
-| `num_inference_steps` | int    | None    | Number of denoising steps                        |
-| `guidance_scale`      | float  | None    | CFG guidance scale (low-noise stage)             |
-| `guidance_scale_2`    | float  | None    | CFG guidance scale (high-noise stage, Wan2.2)     |
-| `boundary_ratio`      | float  | None    | Boundary split ratio for low/high DiT (Wan2.2)   |
-| `flow_shift`          | float  | None    | Scheduler flow shift (Wan2.2)                    |
-| `seed`                | int    | None    | Random seed (reproducible)                       |
-| `lora`                | object | None    | LoRA configuration                               |
-| `enable_frame_interpolation` | bool | false | Enable RIFE frame interpolation before MP4 encoding |
-| `frame_interpolation_exp` | int | 1 | Interpolation exponent; 1=2x temporal resolution, 2=4x |
-| `frame_interpolation_scale` | float | 1.0 | RIFE inference scale; use 0.5 for high-resolution inputs |
-| `frame_interpolation_model_path` | str | None | Local directory or Hugging Face repo ID with `flownet.pkl`; defaults to `elfgum/RIFE-4.22.lite` |
+| Parameter             | Type   | Default | Description                                                                                              |
+| --------------------- | ------ | ------- |----------------------------------------------------------------------------------------------------------|
+| `prompt`              | str    | -       | Text description of the desired video                                                                    |
+| `seconds`             | str    | None    | Clip duration in seconds                                                                                 |
+| `size`                | str    | None    | Output size in `WIDTHxHEIGHT` format                                                                     |
+| `negative_prompt`     | str    | None    | Negative prompt                                                                                          |
+| `width`               | int    | None    | Video width in pixels                                                                                    |
+| `height`              | int    | None    | Video height in pixels                                                                                   |
+| `num_frames`          | int    | None    | Number of frames to generate                                                                             |
+| `fps`                 | int    | None    | Frames per second for output video                                                                       |
+| `num_inference_steps` | int    | None    | Number of denoising steps                                                                                |
+| `guidance_scale`      | float  | None    | CFG guidance scale (low-noise stage)                                                                     |
+| `guidance_scale_2`    | float  | None    | CFG guidance scale (high-noise stage, Wan2.2)                                                            |
+| `boundary_ratio`      | float  | None    | Boundary split ratio for low/high DiT (Wan2.2)                                                           |
+| `flow_shift`          | float  | None    | Scheduler flow shift                                                                                     |
+| `seed`                | int    | None    | Random seed (reproducible)                                                                               |
+| `lora`                | object | None    | LoRA configuration                                                                                       |
+| `enable_frame_interpolation` | bool | false | Enable RIFE frame interpolation before MP4 encoding (Wan2.2)                                             |
+| `frame_interpolation_exp` | int | 1 | Interpolation exponent; 1=2x temporal resolution, 2=4x (Wan2.2)                                          |
+| `frame_interpolation_scale` | float | 1.0 | RIFE inference scale; use 0.5 for high-resolution inputs (Wan2.2)                                        |
+| `frame_interpolation_model_path` | str | None | Local directory or Hugging Face repo ID with `flownet.pkl`; defaults to `elfgum/RIFE-4.22.lite` (Wan2.2) |
 
 ## Frame Interpolation
 
 Frame interpolation is an optional post-processing step for `/v1/videos` and
-`/v1/videos/sync`. It synthesizes intermediate frames between generated frames
+`/v1/videos/sync`, supported by Wan2.2 models. It synthesizes intermediate frames between generated frames
 without rerunning the diffusion model. If the generated video has `N` frames,
 the interpolated output frame count is `(N - 1) * 2**exp + 1`. The encoder FPS
 is multiplied by `2**exp` so the output duration remains close to the original.
@@ -210,6 +274,7 @@ device without blocking the FastAPI event loop.
 Example: generate 5 frames and interpolate to 9 frames:
 
 ```bash
+# Note: frame interpolation specific arguments are relevant only for Wan2.2 models
 curl -X POST http://localhost:8091/v1/videos/sync \
   -F "prompt=A dog running through a park" \
   -F "num_frames=5" \

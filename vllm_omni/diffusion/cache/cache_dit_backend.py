@@ -1438,6 +1438,76 @@ def enable_cache_for_hunyuan_video_15(pipeline: Any, cache_config: Any) -> Calla
     return refresh_cache_context
 
 
+def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
+    """Enable cache-dit for Cosmos3 (T2V and I2V).
+
+    Cosmos3 has a dual-pathway architecture (UND + GEN) but only the GEN
+    pathway (``gen_layers``) runs at every denoising step.  The UND pathway
+    computes once and its K/V are cached by the pipeline itself; no cache-dit
+    needed there.  We wrap only ``gen_layers`` via ``BlockAdapter``.
+
+    Args:
+        pipeline: The Cosmos3 pipeline instance.
+        cache_config: DiffusionCacheConfig instance with cache configuration.
+
+    Returns:
+        A refresh function that can be called to update cache context with new num_inference_steps.
+    """
+    db_cache_config = _build_db_cache_config(cache_config)
+
+    calibrator_config = None
+    if cache_config.enable_taylorseer:
+        taylorseer_order = cache_config.taylorseer_order
+        calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
+        logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
+
+    logger.info(
+        f"Enabling cache-dit on Cosmos3 gen_layers: "
+        f"Fn={db_cache_config.Fn_compute_blocks}, "
+        f"Bn={db_cache_config.Bn_compute_blocks}, "
+        f"W={db_cache_config.max_warmup_steps}, "
+    )
+
+    cache_dit.enable_cache(
+        BlockAdapter(
+            transformer=pipeline.transformer,
+            blocks=[pipeline.transformer.gen_layers],
+            # Cosmos3 GEN blocks return only hidden_states.  Per-layer UND K/V
+            # conditioning uses the transformer's cache-dit fallback path.
+            forward_pattern=[ForwardPattern.Pattern_3],
+            params_modifiers=[
+                ParamsModifier(
+                    cache_config=db_cache_config,
+                    calibrator_config=calibrator_config,
+                ),
+            ],
+            check_forward_pattern=False,
+            has_separate_cfg=True,
+        ),
+        cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
+    )
+
+    def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
+        if cache_config.scm_steps_mask_policy is None:
+            cache_dit.refresh_context(pipeline.transformer, num_inference_steps=num_inference_steps, verbose=verbose)
+        else:
+            cache_dit.refresh_context(
+                pipeline.transformer,
+                cache_config=DBCacheConfig().reset(
+                    num_inference_steps=num_inference_steps,
+                    steps_computation_mask=cache_dit.steps_mask(
+                        mask_policy=cache_config.scm_steps_mask_policy,
+                        total_steps=num_inference_steps,
+                    ),
+                    steps_computation_policy=cache_config.scm_steps_policy,
+                ),
+                verbose=verbose,
+            )
+
+    return refresh_cache_context
+
+
 # Register custom cache-dit enablers after function definitions
 CUSTOM_DIT_ENABLERS.update(
     {
@@ -1463,6 +1533,7 @@ CUSTOM_DIT_ENABLERS.update(
         "ErnieImagePipeline": enable_cache_for_ernie_image,
         "HunyuanVideo15Pipeline": enable_cache_for_hunyuan_video_15,
         "HunyuanVideo15I2VPipeline": enable_cache_for_hunyuan_video_15,
+        "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
 )
 

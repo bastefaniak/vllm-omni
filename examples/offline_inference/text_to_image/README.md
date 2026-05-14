@@ -34,6 +34,7 @@ This folder provides several entrypoints for experimenting with text-to-image di
 | `black-forest-labs/FLUX.2-klein-4B` | 1024 x 1024 | 72.7 | 14.9 |
 | `black-forest-labs/FLUX.2-klein-9B` | 1024 x 1024 | 37.1 | 32.3 |
 | `black-forest-labs/FLUX.2-dev` | 1024 x 1024 | 65.7 | >80 (CPU offload required) |
+| `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` | 1024 x 1024 | model/checkpoint dependent | local checkpoint |
 | `HunyuanImage-3.0` | 1024 x 1024 | 80.0 (TP≥3)  | 160 |
 
 !!! info
@@ -73,11 +74,13 @@ python text_to_image.py \
 
 | Argument | Type | Default | Description |
 | -------- | ---- | ------- | ----------- |
+| `--model` | str | `"Qwen/Qwen-Image"` | Diffusion model name or local path |
+| `--model-class-name` | str | `None` | Override pipeline class, for example `Cosmos3OmniDiffusersPipeline` |
 | `--prompt` | str | `"a cup of coffee on the table"` | Text description for image generation |
 | `--seed` | int | `142` | Integer seed for deterministic sampling |
 | `--negative-prompt` | str | `None` | Negative prompt for classifier-free conditional guidance |
 | `--cfg-scale` | float | `4.0` | True CFG scale (model-specific guidance strength) |
-| `--guidance-scale` | float | `1.0` | Classifier-free guidance scale |
+| `--guidance-scale` | float | `4.0` | Classifier-free guidance scale |
 | `--num-images-per-prompt` | int | `1` | Number of images per prompt (saved as `output`, `output_1`, ...) |
 | `--num-inference-steps` | int | `50` | Diffusion sampling steps (more steps = higher quality, slower) |
 | `--height` | int | `1024` | Output image height in pixels |
@@ -176,6 +179,28 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --enable-cpu-offload \
   --output flux2-dev.png
 ```
+
+### Cosmos3
+
+Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
+
+```bash
+export COSMOS3_MODEL=/path/to/cosmos3-diffusers
+
+python text_to_image.py \
+  --model "$COSMOS3_MODEL" \
+  --model-class-name Cosmos3OmniDiffusersPipeline \
+  --prompt "A small warehouse robot carrying a blue box, clean product photography" \
+  --negative-prompt "blurry, distorted, low quality" \
+  --guidance-scale 7.0 \
+  --num-inference-steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --num-images-per-prompt 1 \
+  --output cosmos3_t2i.png
+```
+
+This script marks text-to-image requests with `modalities=["image"]`, which selects Cosmos3 T2I. Cosmos3 currently supports one prompt per request; use `--num-images-per-prompt` to request multiple images for that prompt. Model-level CPU offload is not supported for Cosmos3, so use `--enable-layerwise-offload` for offload instead.
 
 ### Batch Requests (Multiple Prompts)
 
