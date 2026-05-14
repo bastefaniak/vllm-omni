@@ -896,8 +896,7 @@ class Cosmos3OmniDiffusersPipeline(
     ) -> tuple[torch.Tensor, int]:
         sound_tokenizer = self._get_sound_tokenizer()
         hop_size = int(
-            getattr(sound_tokenizer, "hop_size", None)
-            or getattr(sound_tokenizer, "temporal_compression_factor")
+            getattr(sound_tokenizer, "hop_size", None) or getattr(sound_tokenizer, "temporal_compression_factor")
         )
         latent_frames = max(1, math.ceil(max(1, int(target_audio_samples)) / hop_size))
         sound_dim = int(getattr(sound_tokenizer, "latent_ch", 64))
