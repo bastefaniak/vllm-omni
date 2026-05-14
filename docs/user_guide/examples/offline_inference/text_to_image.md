@@ -32,11 +32,12 @@ This folder provides several entrypoints for experimenting with text-to-image di
 | `AIDC-AI/Ovis-Image-7B` | 1024 x 1024 | 71.8 | 17.1 |
 | `OmniGen2/OmniGen2` |  1024 x 1024 | 20.1 | 14.7 |
 | `stabilityai/stable-diffusion-3.5-medium` | 1024 x 1024 | 20.1 | 15.6 |
-| `black-forest-labs/FLUX.1-dev` | 1024 x 1024 | 77.6 | 31.4 |
+| `black-forest-labs/FLUX.1-dev` | 1024 x 1024 | 33.9 | 31.4 |
+| `black-forest-labs/FLUX.1-schnell` | 1024 x 1024 | 33.9 | 31.4 |
 | `black-forest-labs/FLUX.2-klein-4B` | 1024 x 1024 | 72.7 | 14.9 |
 | `black-forest-labs/FLUX.2-klein-9B` | 1024 x 1024 | 37.1 | 32.3 |
 | `black-forest-labs/FLUX.2-dev` | 1024 x 1024 | 65.7 | >80 (CPU offload required) |
-| `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` | 1024 x 1024 | model/checkpoint dependent | local checkpoint |
+| `HunyuanImage-3.0` | 1024 x 1024 | 80.0 (TP≥3)  | 160 |
 
 !!! info
 *Peak VRAM:  based on basic single-card usage, batch size =1, without any acceleration/optimization features. FLUX.2-dev requires `--enable-cpu-offload` on a single 80 GiB GPU.
@@ -76,11 +77,12 @@ python text_to_image.py \
 | Argument | Type | Default | Description |
 | -------- | ---- | ------- | ----------- |
 | `--model` | str | `"Qwen/Qwen-Image"` | Diffusion model name or local path |
+| `--model-class-name` | str | `None` | Override pipeline class |
 | `--prompt` | str | `"a cup of coffee on the table"` | Text description for image generation |
 | `--seed` | int | `142` | Integer seed for deterministic sampling |
 | `--negative-prompt` | str | `None` | Negative prompt for classifier-free conditional guidance |
 | `--cfg-scale` | float | `4.0` | True CFG scale (model-specific guidance strength) |
-| `--guidance-scale` | float | `1.0` | Classifier-free guidance scale |
+| `--guidance-scale` | float | `4.0` | Classifier-free guidance scale |
 | `--num-images-per-prompt` | int | `1` | Number of images per prompt (saved as `output`, `output_1`, ...) |
 | `--num-inference-steps` | int | `50` | Diffusion sampling steps (more steps = higher quality, slower) |
 | `--height` | int | `1024` | Output image height in pixels |
@@ -95,6 +97,8 @@ python text_to_image.py \
 | `--enable-cpu-offload` | flag | off | Enable CPU offloading for diffusion models |
 | `--lora-path` | str | — | Path to PEFT LoRA adapter folder |
 | `--lora-scale` | float | `1.0` | Scale factor for LoRA weights |
+| `--use-system-prompt` | str | `None` | System prompt preset: `en_unified`, `en_vanilla`, `en_recaption`, `en_think_recaption`, `dynamic`, `None`, or custom text. Recommended: `en_unified`. Only for HunyuanImage-3.0.|
+| `--system-prompt` | str | `None` | Custom system prompt text. Only used when `--use-system-prompt` is set to `custom`. Only for HunyuanImage-3.0.|
 
 **NextStep-1.1 specific arguments:**
 
@@ -127,6 +131,19 @@ python text_to_image.py \
 ```
 
 `Tongyi-MAI/Z-Image-Turbo` is a distilled version of Z-Image. Distilled diffusion models usually require less number of inference steps (4~9), and Classifier-Free Guidance (CFG) is usually NOT applied. Similar distilled models are `black-forest-labs/FLUX.2-klein-4B` and `black-forest-labs/FLUX.2-klein-9B`.
+
+Advanced UAA example (requires 2 GPUs):
+
+```bash
+python text_to_image.py \
+  --model Tongyi-MAI/Z-Image-Turbo \
+  --prompt "a cup of coffee on the table" \
+  --ulysses-degree 2 \
+  --ulysses-mode advanced_uaa \
+  --height 1024 \
+  --width 1024 \
+  --output outputs/coffee_hybrid.png
+```
 
 ### NextStep Models
 
@@ -164,28 +181,6 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --enable-cpu-offload \
   --output flux2-dev.png
 ```
-
-### Cosmos3
-
-Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
-
-```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
-
-python text_to_image.py \
-  --model "$COSMOS3_MODEL" \
-  --model-class-name Cosmos3OmniDiffusersPipeline \
-  --prompt "A small warehouse robot carrying a blue box, clean product photography" \
-  --negative-prompt "blurry, distorted, low quality" \
-  --guidance-scale 7.0 \
-  --num-inference-steps 50 \
-  --height 1024 \
-  --width 1024 \
-  --num-images-per-prompt 1 \
-  --output cosmos3_t2i.png
-```
-
-This script marks text-to-image requests with `modalities=["image"]`, which selects Cosmos3 T2I. Cosmos3 currently supports one prompt per request; use `--num-images-per-prompt` to request multiple images for that prompt. Model-level CPU offload is not supported for Cosmos3, so use `--enable-layerwise-offload` for offload instead.
 
 ### Batch Requests (Multiple Prompts)
 
@@ -258,7 +253,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 #### CFG Parallel
 
 Set `--cfg-parallel-size 2` to enable CFG Parallel for faster inference on multi-GPU setups.
-See more examples in the [diffusion acceleration user guide](https://github.com/vllm-project/vllm-omni/tree/main/docs/user_guide/diffusion_acceleration.md#using-cfg-parallel).
+See more examples in the [cfg_parallel user guide](https://github.com/vllm-project/vllm-omni/tree/main/docs/user_guide/parallelism/cfg_parallel.md#using-cfg-parallel).
 
 #### LoRA
 
@@ -282,15 +277,6 @@ lora_adapter/
 ```
 
 ## Web UI Demo
-
-!!! note "Gradio is an optional dependency"
-    The Gradio demo requires the `[demo]` extras. Install them first:
-
-    ```bash
-    pip install 'vllm-omni[demo]'
-    ```
-
-    Or, if installing from source: `pip install -e '.[demo]'`
 
 Launch the Gradio demo:
 

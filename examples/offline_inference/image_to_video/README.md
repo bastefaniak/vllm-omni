@@ -1,6 +1,6 @@
 # Image-To-Video
 
-This example demonstrates how to generate videos from images using Wan2.2 Image-to-Video models and Cosmos3 with vLLM-Omni's offline inference API.
+This example demonstrates how to generate videos from images using Wan2.2 Image-to-Video models with vLLM-Omni's offline inference API.
 
 ## Supported Models
 
@@ -8,7 +8,6 @@ This example demonstrates how to generate videos from images using Wan2.2 Image-
 |-------|--------------------|----------------|---------------|----------|
 | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | auto, 480p area | 81 | 50 | 5.0 |
 | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | auto, 480p area | 81 | 50 | 5.0 |
-| `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` | auto, 720p area | 81 | 35 | 4.0 |
 
 ## Local CLI Usage
 
@@ -56,34 +55,10 @@ python image_to_video.py \
   --output i2v_output.mp4
 ```
 
-### Cosmos3
-
-Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
-
-```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
-
-python image_to_video.py \
-  --model "$COSMOS3_MODEL" \
-  --model-class-name Cosmos3OmniDiffusersPipeline \
-  --image cherry_blossom.jpg \
-  --prompt "Cherry blossoms swaying gently in the breeze, petals falling, smooth motion" \
-  --negative-prompt "blurry, distorted, low quality" \
-  --height 720 \
-  --width 1280 \
-  --num-frames 81 \
-  --guidance-scale 4.0 \
-  --num-inference-steps 35 \
-  --fps 24 \
-  --output cosmos3_i2v_output.mp4
-```
-
-For Cosmos3 I2V, the input image is resized and center-cropped by the pipeline. If `--height` and `--width` are omitted, this example chooses a 720p-area resolution from the input aspect ratio. Cosmos3 currently supports one prompt and one video per request, and model-level CPU offload is not supported; use `--enable-layerwise-offload` instead.
-
 Key arguments:
 
 - `--model`: Model ID (I2V-A14B for MoE, TI2V-5B for unified T2V+I2V).
-- `--model-class-name`: explicit pipeline class. Use `Cosmos3OmniDiffusersPipeline` for Cosmos3 checkpoints.
+- `--model-class-name`: explicit pipeline class override.
 - `--image`: Path to input image (required).
 - `--prompt`: Text description of desired motion/animation.
 - `--height/--width`: Output resolution (auto-calculated from image if not set). Dimensions should be multiples of 16.

@@ -20,21 +20,6 @@ Or use the startup script:
 bash run_server.sh
 ```
 
-### Cosmos3
-
-Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
-
-```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
-
-vllm serve "$COSMOS3_MODEL" \
-  --omni \
-  --port 8091 \
-  --model-class-name Cosmos3OmniDiffusersPipeline
-```
-
-Use `--enable-layerwise-offload`, `--cache-backend cache_dit`, `--cfg-parallel-size 2`, `--usp`, `--tensor-parallel-size`, or `--use-hsdp` as needed. Do not use `--enable-cpu-offload`; Cosmos3 does not support model-level CPU offload.
-
 ### Start with Parallelism Acceleration
 
 Enable Tensor Parallelism and VAE Patch Parallelism for faster inference:
@@ -82,26 +67,6 @@ curl -s http://localhost:8091/v1/chat/completions \
     }
   }' | jq -r '.choices[0].message.content[0].image_url.url' | cut -d',' -f2- | base64 -d > output.png
 ```
-
-#### Cosmos3 Images API
-
-The dedicated image endpoint sets `modalities=["image"]` internally, which selects Cosmos3 text-to-image.
-
-```bash
-curl -X POST http://localhost:8091/v1/images/generations \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "A small warehouse robot carrying a blue box, clean product photography",
-    "size": "1024x1024",
-    "n": 1,
-    "num_inference_steps": 50,
-    "guidance_scale": 7.0,
-    "negative_prompt": "blurry, distorted, low quality",
-    "seed": 42
-  }' | jq -r '.data[0].b64_json' | base64 -d > cosmos3_t2i.png
-```
-
-Cosmos3 currently supports one prompt per request. Use `n` to request multiple images for that prompt.
 
 ### Method 2: Using OpenAI Python SDK
 

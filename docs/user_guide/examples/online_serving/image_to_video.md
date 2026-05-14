@@ -3,7 +3,7 @@
 Source <https://github.com/vllm-project/vllm-omni/tree/main/examples/online_serving/image_to_video>.
 
 
-This example demonstrates how to deploy image-to-video models, including Wan2.2 and Cosmos3, for online video generation using vLLM-Omni.
+This example demonstrates how to deploy Wan2.2 image-to-video models for online video generation using vLLM-Omni.
 
 ## Supported Models
 
@@ -11,7 +11,6 @@ This example demonstrates how to deploy image-to-video models, including Wan2.2 
 |-------|----------|
 | Wan2.2 I2V | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` |
 | Wan2.2 TI2V | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` |
-| Cosmos3 I2V | `$COSMOS3_MODEL` with `Cosmos3OmniDiffusersPipeline` |
 
 ## Start Server
 
@@ -37,21 +36,22 @@ The script allows overriding:
 - `CACHE_BACKEND` (default: `none`)
 - `ENABLE_CACHE_DIT_SUMMARY` (default: `0`)
 
-### Cosmos3
+### Ascend / Local LightX2V Example
 
-Cosmos3 uses one pipeline for text-to-image, text-to-video, and image-to-video. Set `COSMOS3_MODEL` to a local Diffusers-format Cosmos3 checkpoint or model reference, and select the pipeline explicitly.
+For a local Wan2.2-LightX2V Diffusers directory on Ascend/NPU, you can start the server like this:
 
 ```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
-
-vllm serve "$COSMOS3_MODEL" \
+vllm serve /path/to/Wan2.2-I2V-A14B-LightX2V-Diffusers-Lightning \
   --omni \
   --port 8091 \
-  --model-class-name Cosmos3OmniDiffusersPipeline \
-  --allowed-local-media-path /
+  --flow-shift 12 \
+  --cfg-parallel-size 1 \
+  --ulysses-degree 4 \
+  --use-hsdp \
+  --trust-remote-code \
+  --allowed-local-media-path / \
+  --seed 42
 ```
-
-Use `--enable-layerwise-offload`, `--cache-backend cache_dit`, `--cfg-parallel-size 2`, `--usp`, `--tensor-parallel-size`, or `--use-hsdp` as needed. Do not use `--enable-cpu-offload`; Cosmos3 does not support model-level CPU offload.
 
 ## Async Job Behavior
 
@@ -83,7 +83,6 @@ file. Metadata is returned via response headers:
 - `X-Model`: model name used for generation
 - `X-Inference-Time-S`: wall-clock inference time in seconds
 
-### Wan2.2 Sync Request
 ```bash
 curl -X POST http://localhost:8091/v1/videos/sync \
   -F "prompt=A bear playing with yarn, smooth motion" \
@@ -97,59 +96,34 @@ curl -X POST http://localhost:8091/v1/videos/sync \
   -F "guidance_scale_2=1.0" \
   -F "boundary_ratio=0.875" \
   -F "flow_shift=12.0" \
-  -F "enable_frame_interpolation=true" \
-  -F "frame_interpolation_exp=1" \
-  -F "frame_interpolation_scale=1.0" \
+  -F 'extra_params={"sample_solver":"euler"}' \
   -F "seed=42" \
   -o sync_i2v_output.mp4
 ```
 
-### Cosmos3 Sync Request
+For Wan Lightning/Distill checkpoints, pass `{"sample_solver":"euler"}` via `extra_params`. The default solver is `unipc`.
+
+Example matching the local LightX2V deployment above:
 
 ```bash
-curl -X POST http://localhost:8091/v1/videos/sync \
-  -F "prompt=Cherry blossoms swaying gently in the breeze, petals falling, smooth motion" \
-  -F "negative_prompt=blurry, distorted, low quality" \
-  -F "input_reference=@/path/to/cherry_blossom.jpg" \
-  -F "size=1280x720" \
+curl -sS -X POST http://localhost:8091/v1/videos/sync \
+  -H "Accept: video/mp4" \
+  -F "prompt=A cat playing with yarn" \
+  -F "input_reference=@/path/to/input.jpg" \
+  -F "width=832" \
+  -F "height=480" \
   -F "num_frames=81" \
-  -F "fps=24" \
-  -F "num_inference_steps=35" \
-  -F "guidance_scale=4.0" \
+  -F "fps=16" \
+  -F "num_inference_steps=4" \
+  -F "guidance_scale=1.0" \
+  -F "guidance_scale_2=1.0" \
+  -F "boundary_ratio=0.875" \
   -F "seed=42" \
-  -o cosmos3_i2v_output.mp4
+  -F 'extra_params={"sample_solver":"euler"}' \
+  -o ./output.mp4
 ```
 
-For async generation, send the same form fields to `POST /v1/videos`, poll `GET /v1/videos/{video_id}`, and download from `GET /v1/videos/{video_id}/content`. Cosmos3 currently supports one prompt and one video per request.
-
-```bash
-create_response=$(curl -s http://localhost:8091/v1/videos \
-  -H "Accept: application/json" \
-  -F "prompt=Cherry blossoms swaying gently in the breeze, petals falling, smooth motion" \
-  -F "negative_prompt=blurry, distorted, low quality" \
-  -F "input_reference=@/path/to/cherry_blossom.jpg" \
-  -F "size=1280x720" \
-  -F "num_frames=81" \
-  -F "fps=24" \
-  -F "num_inference_steps=35" \
-  -F "guidance_scale=4.0" \
-  -F "seed=42")
-
-video_id=$(echo "$create_response" | jq -r '.id')
-while true; do
-  status=$(curl -s "http://localhost:8091/v1/videos/${video_id}" | jq -r '.status')
-  if [ "$status" = "completed" ]; then
-    break
-  fi
-  if [ "$status" = "failed" ]; then
-    echo "Video generation failed"
-    exit 1
-  fi
-  sleep 2
-done
-
-curl -L "http://localhost:8091/v1/videos/${video_id}/content" -o cosmos3_i2v_output.mp4
-```
+Use `/v1/videos/sync` if you want to write the MP4 directly to a file. `POST /v1/videos` is async and returns job metadata, not inline `b64_json`.
 
 ## Storage
 
@@ -174,8 +148,10 @@ export VLLM_OMNI_STORAGE_MAX_CONCURRENCY=8
 # Basic image-to-video generation
 bash run_curl_image_to_video.sh
 
+# Wan Lightning/Distill checkpoints
+SAMPLE_SOLVER=euler bash run_curl_image_to_video.sh
+
 # Or execute directly (OpenAI-style multipart)
-# Note: frame interpolation specific arguments are relevant only for Wan2.2 models
 create_response=$(curl -s http://localhost:8091/v1/videos \
   -H "Accept: application/json" \
   -F "prompt=A bear playing with yarn, smooth motion" \
@@ -190,9 +166,7 @@ create_response=$(curl -s http://localhost:8091/v1/videos \
   -F "guidance_scale_2=1.0" \
   -F "boundary_ratio=0.875" \
   -F "flow_shift=12.0" \
-  -F "enable_frame_interpolation=true" \
-  -F "frame_interpolation_exp=1" \
-  -F "frame_interpolation_scale=1.0" \
+  -F 'extra_params={"sample_solver":"euler"}' \
   -F "seed=42")
 
 video_id=$(echo "$create_response" | jq -r '.id')
@@ -238,7 +212,6 @@ curl -X POST http://localhost:8091/v1/videos \
 ### Generation with Parameters
 
 ```bash
-# Note: frame interpolation specific arguments are relevant only for Wan2.2 models
 curl -X POST http://localhost:8091/v1/videos \
   -F "prompt=A bear playing with yarn, smooth motion" \
   -F "negative_prompt=low quality, blurry, static" \
@@ -252,34 +225,11 @@ curl -X POST http://localhost:8091/v1/videos \
   -F "guidance_scale_2=1.0" \
   -F "boundary_ratio=0.875" \
   -F "flow_shift=12.0" \
-  -F "enable_frame_interpolation=true" \
-  -F "frame_interpolation_exp=1" \
-  -F "frame_interpolation_scale=1.0" \
+  -F 'extra_params={"sample_solver":"euler"}' \
   -F "seed=42"
 ```
 
-Frame interpolation is also available for supported Wan2.2 I2V requests. See
-[Frame Interpolation](../../diffusion/frame_interpolation.md) for worker-side
-execution details and feature constraints.
-
-### Frame Interpolation Example
-
-```bash
-curl -X POST http://localhost:8091/v1/videos/sync \
-  -F "prompt=A bear playing with yarn, smooth motion" \
-  -F "input_reference=@/path/to/qwen-bear.png" \
-  -F "width=832" \
-  -F "height=480" \
-  -F "num_frames=33" \
-  -F "fps=16" \
-  -F "num_inference_steps=40" \
-  -F "guidance_scale=1.0" \
-  -F "guidance_scale_2=1.0" \
-  -F "enable_frame_interpolation=true" \
-  -F "frame_interpolation_exp=1" \
-  -F "frame_interpolation_scale=1.0" \
-  -o sync_i2v_interpolated.mp4
-```
+`sample_solver` is supported by Wan2.2 online serving through the existing `extra_params` field, which is merged into the pipeline `extra_args`. Use `unipc` for the default multistep solver, or `euler` for Lightning/Distill checkpoints.
 
 ## Create Response Format
 
