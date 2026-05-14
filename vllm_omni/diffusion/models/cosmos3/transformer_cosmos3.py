@@ -1062,7 +1062,7 @@ class Cosmos3VFMTransformer(nn.Module):
         action_dim_value = _od_config_get(od_config, "action_dim", None)
         if action_dim_value is None:
             action_dim_value = _od_config_get(od_config, "max_action_dim", None)
-        self.action_gen = _as_bool(action_gen_value) if action_gen_value is not None else action_dim_value is not None
+        self.action_gen = _as_bool(action_gen_value) if action_gen_value is not None else False
         self.action_dim = int(action_dim_value if action_dim_value is not None else 64)
         self.num_embodiment_domains = int(_od_config_get(od_config, "num_embodiment_domains", 32))
         from .sound_tokenizer import get_sound_latent_fps
@@ -1409,7 +1409,7 @@ class Cosmos3VFMTransformer(nn.Module):
             raise ValueError(
                 "Cosmos3 action generation was requested, but this transformer "
                 "was initialized without action modules. Check that the "
-                "transformer config enables action_gen or defines action_dim/max_action_dim."
+                "transformer config enables action_gen."
             )
         if has_sound and not self.sound_gen:
             raise ValueError(

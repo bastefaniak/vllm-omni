@@ -12,7 +12,6 @@ import math
 from typing import Any, Literal
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.cuda import amp
 from torch.nn.utils import weight_norm
@@ -63,36 +62,6 @@ def may_mask(
     return x
 
 
-class LayerNorm(nn.Module):
-    """
-    LayerNorm with optional bias.
-    PyTorch doesn't support bias=False natively.
-    """
-
-    def __init__(self, size: int, gamma0: float = 1, eps: float = 1e-5, use_bias: bool = False) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(size))
-        self.bias = nn.Parameter(torch.zeros(size)) if use_bias else None
-        self.eps = eps
-        self.size = size
-
-    def forward(self, tensor: Tensor) -> Tensor:
-        """
-        Forward pass.
-
-        Args:
-            tensor: Input tensor of shape (B, T, C)
-
-        Returns:
-            Normalized tensor
-        """
-        dtype = tensor.dtype
-        # fp32 to avoid numerical issues
-        with amp.autocast(enabled=True, dtype=torch.float32):
-            tensor = F.layer_norm(tensor, self.weight.shape, self.weight, self.bias, self.eps)
-        return tensor.to(dtype)
-
-
 class ConvNeXtBlock(nn.Module):
     """
     ConvNeXt 1D Block adapted from https://github.com/charactr-platform/vocos
@@ -131,7 +100,7 @@ class ConvNeXtBlock(nn.Module):
                 nn.Conv1d(dim, dim, kernel_size=7, groups=dim),
             )
 
-        self.norm = LayerNorm(dim)
+        self.norm = nn.LayerNorm(dim, bias=False)
         self.pwconv1 = nn.Conv1d(dim, intermediate_dim, 1)  # pointwise/1x1 convs
         self.act = activations.SnakeBeta(intermediate_dim) if use_snake else nn.GELU()
 
@@ -153,7 +122,11 @@ class ConvNeXtBlock(nn.Module):
         """
         residual = x  # [B,C,T]
         x = self.dwconv(may_mask(x, mask))  # [B,C,T]
-        x = self.norm(x.permute(0, 2, 1)).permute(0, 2, 1)  # [B,C,T] -> [B,T,C] -> [B,C,T]
+        x = x.permute(0, 2, 1)  # [B,C,T] -> [B,T,C]
+        dtype = x.dtype
+        with amp.autocast(enabled=True, dtype=torch.float32):
+            x = self.norm(x)
+        x = x.to(dtype).permute(0, 2, 1)  # [B,T,C] -> [B,C,T]
         x = self.pwconv1(x)  # [B,intermediate_dim,T]
         x = self.act(x)  # [B,intermediate_dim,T]
         x = self.pwconv2(x)  # [B,C,T]

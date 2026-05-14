@@ -8,7 +8,6 @@ from torch import nn, pow, sin
 from torch.nn import Parameter
 
 
-# https://github.com/jaywalnut310/vits/blob/main/commons.py
 @torch.jit.script
 def fused_add_tanh_sigmoid_multiply(
     input_a: torch.Tensor, input_b: torch.Tensor, n_channels: list[int]
@@ -21,7 +20,6 @@ def fused_add_tanh_sigmoid_multiply(
     return acts  # [B,C,T]
 
 
-# about 10% faster training. no_div_by_zero (1e-9) baked in
 @torch.jit.script
 def fused_snake(x: torch.Tensor, alpha: torch.Tensor, beta: torch.Tensor) -> torch.Tensor:
     return x + (1.0 / (beta + 1e-9)) * pow(sin(x * alpha), 2)

@@ -68,8 +68,7 @@ class VAEBottleneck(Bottleneck):
         Encode input through VAE bottleneck.
 
         Args:
-            x: Input tensor with shape [B, C*2, T] where C*2 contains
-               concatenated mean and scale parameters
+            x: Input tensor with shape [B, C*2, T] where C*2 contains concatenated mean and scale parameters
             return_info: Whether to return additional info dict
 
         Returns:

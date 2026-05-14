@@ -1550,7 +1550,7 @@ class Cosmos3OmniDiffusersPipeline(
             raise ValueError(
                 "Cosmos3 action generation was requested, but the transformer was "
                 "initialized without action modules. Check that the checkpoint config "
-                "enables action_gen or defines action_dim/max_action_dim and includes action weights."
+                "enables action_gen and includes action weights."
             )
         if sound_enabled and is_t2i:
             raise ValueError(
