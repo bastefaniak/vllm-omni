@@ -938,6 +938,10 @@ class DiffusionRequestAbortedError(RuntimeError):
     """Raised when a diffusion request ends via user-visible abort."""
 
 
+class GuardrailViolationError(ValueError):
+    """Raised when a guardrail blocks user input or generated output."""
+
+
 @dataclass
 class AttentionSpec:
     """Specifies a backend and its backend-specific parameters for one attention role."""

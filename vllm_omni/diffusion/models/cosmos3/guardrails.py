@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import cv2
@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 from vllm.logger import init_logger
 
+from vllm_omni.diffusion.data import GuardrailViolationError
 from vllm_omni.diffusion.models.progress_bar import _is_rank_zero
 
 logger = init_logger(__name__)
@@ -100,6 +101,103 @@ def _download_checkpoint() -> str:
     return snapshot_download(GUARDRAIL_HF_REPO, revision=GUARDRAIL_HF_REVISION)
 
 
+def _move_tokenizer_output_to_device(tokenizer_output: object, device: str) -> object:
+    if hasattr(tokenizer_output, "to"):
+        return tokenizer_output.to(device)
+    if isinstance(tokenizer_output, Mapping):
+        return {
+            key: value.to(device) if hasattr(value, "to") else value for key, value in tokenizer_output.items()
+        }
+    return tokenizer_output
+
+
+def _qwen_input_length(input_ids: object) -> int:
+    if hasattr(input_ids, "shape"):
+        return int(input_ids.shape[-1])
+    if isinstance(input_ids, list | tuple):
+        if input_ids and isinstance(input_ids[0], list | tuple):
+            return len(input_ids[0])
+        return len(input_ids)
+    raise TypeError(f"Qwen3Guard tokenizer returned unsupported input_ids type: {type(input_ids).__name__}")
+
+
+def _generate_qwen_guardrail_response(prompt: str, tokenizer: Any, model: Any, device: str) -> str:
+    conversations = [{"role": "user", "content": prompt}]
+    model_inputs = tokenizer.apply_chat_template(
+        conversations,
+        tokenize=True,
+        return_tensors="pt",
+        add_generation_prompt=True,
+    )
+    model_inputs = _move_tokenizer_output_to_device(model_inputs, device)
+
+    if isinstance(model_inputs, torch.Tensor):
+        input_ids = model_inputs
+        generate_kwargs = {}
+        generate_args = (input_ids,)
+    elif isinstance(model_inputs, Mapping):
+        if "input_ids" not in model_inputs:
+            raise TypeError("Qwen3Guard tokenizer output must include input_ids.")
+        input_ids = model_inputs["input_ids"]
+        generate_kwargs = dict(model_inputs)
+        generate_args = ()
+    else:
+        input_ids = getattr(model_inputs, "input_ids", None)
+        if input_ids is None:
+            raise TypeError(
+                "Qwen3Guard tokenizer must return a tensor or mapping with input_ids; "
+                f"got {type(model_inputs).__name__}"
+            )
+        generate_kwargs = {"input_ids": input_ids}
+        generate_args = ()
+
+    input_length = _qwen_input_length(input_ids)
+    with torch.no_grad():
+        output_ids = model.generate(*generate_args, **generate_kwargs, max_new_tokens=128)
+    return tokenizer.decode(
+        output_ids[0][input_length:],
+        skip_special_tokens=True,
+    )
+
+
+def _extract_siglip_image_features(features: object) -> torch.Tensor:
+    def _validate_features(tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() != 2:
+            raise TypeError(
+                "SigLIP image feature extractor returned features with shape "
+                f"{tuple(tensor.shape)}; expected pooled features with shape [batch, hidden]."
+            )
+        return tensor
+
+    if isinstance(features, torch.Tensor):
+        return _validate_features(features)
+
+    pooler_output = getattr(features, "pooler_output", None)
+    if isinstance(pooler_output, torch.Tensor):
+        return _validate_features(pooler_output)
+
+    image_embeds = getattr(features, "image_embeds", None)
+    if isinstance(image_embeds, torch.Tensor):
+        return _validate_features(image_embeds)
+
+    if isinstance(features, Mapping):
+        for key in ("pooler_output", "image_embeds"):
+            value = features.get(key)
+            if isinstance(value, torch.Tensor):
+                return _validate_features(value)
+
+    if isinstance(features, list | tuple):
+        if len(features) > 1 and isinstance(features[1], torch.Tensor):
+            return _validate_features(features[1])
+        if features and isinstance(features[0], torch.Tensor):
+            return _validate_features(features[0])
+
+    raise TypeError(
+        "SigLIP image feature extractor returned unsupported output type "
+        f"{type(features).__name__}; expected a tensor or output with pooled image features."
+    )
+
+
 def _build_text_guardrail(offload_to_cpu: bool) -> TextGuardrailFn:
     checkers: list[Callable[[str], tuple[bool, str]]] = []
 
@@ -155,19 +253,7 @@ def _build_text_guardrail(offload_to_cpu: bool) -> TextGuardrailFn:
         )
 
         def _qwen_check(prompt: str) -> tuple[bool, str]:
-            conversations = [{"role": "user", "content": prompt}]
-            input_ids = qwen_tokenizer.apply_chat_template(
-                conversations,
-                tokenize=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
-            ).to(device)
-            with torch.no_grad():
-                output_ids = qwen_model.generate(input_ids, max_new_tokens=128)
-            response = qwen_tokenizer.decode(
-                output_ids[0][input_ids.shape[1] :],
-                skip_special_tokens=True,
-            )
+            response = _generate_qwen_guardrail_response(prompt, qwen_tokenizer, qwen_model, device)
             if "unsafe" in response.lower():
                 return False, f"Qwen3Guard: {response.strip()}"
             return True, ""
@@ -182,7 +268,7 @@ def _build_text_guardrail(offload_to_cpu: bool) -> TextGuardrailFn:
         for checker in checkers:
             is_safe, msg = checker(prompt)
             if not is_safe:
-                raise ValueError(f"Guardrail blocked prompt: {msg}")
+                raise GuardrailViolationError(f"Guardrail blocked prompt: {msg}")
 
     return text_guardrail
 
@@ -192,14 +278,18 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
     safety_checker: Callable[[np.ndarray], tuple[bool, str]] | None = None
     face_blurrer: Callable[[np.ndarray], np.ndarray] | None = None
 
+    # `offload_to_cpu` controls idle weight placement only; the forward pass
+    # always runs on `compute_device` and weights are returned to CPU after.
+    compute_device = "cuda"
+    idle_device = "cpu" if offload_to_cpu else compute_device
+
     # 1. Video content safety filter: SigLIP so400m + SafetyClassifier
     try:
         from PIL import Image
         from transformers import SiglipModel, SiglipProcessor
 
-        device = "cpu" if offload_to_cpu else "cuda"
         siglip_id = "google/siglip-so400m-patch14-384"
-        siglip_model = SiglipModel.from_pretrained(siglip_id).to(device, dtype=torch.float32).eval()
+        siglip_model = SiglipModel.from_pretrained(siglip_id).to(idle_device, dtype=torch.float32).eval()
         siglip_processor = SiglipProcessor.from_pretrained(siglip_id)
 
         classifier = SafetyClassifier(input_size=1152, num_classes=7)
@@ -208,31 +298,35 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
         # Checkpoint keys have "network." prefix from the VideoSafetyModel wrapper.
         state = {k.removeprefix("network."): v for k, v in checkpoint["model"].items()}
         classifier.load_state_dict(state)
-        classifier = classifier.to(device, dtype=torch.float32).eval()
+        classifier = classifier.to(idle_device, dtype=torch.float32).eval()
 
         def _safety_check(frames: np.ndarray) -> tuple[bool, str]:
             nonlocal siglip_model, classifier
+            total = len(frames)
+            if total == 0:
+                return True, ""
             if offload_to_cpu:
-                siglip_model = siglip_model.to("cuda")
-                classifier = classifier.to("cuda")
+                siglip_model = siglip_model.to(compute_device)
+                classifier = classifier.to(compute_device)
 
             unsafe_count = 0
-            total = len(frames)
-            for frame in frames:
-                img = Image.fromarray(frame)
-                inputs = siglip_processor(images=img, return_tensors="pt").to("cuda", dtype=torch.float32)
-                with torch.no_grad():
-                    features = siglip_model.get_image_features(**inputs)
-                    features = features / features.norm(dim=-1, keepdim=True)
-                    logits = classifier(features)
-                    pred = logits.argmax(dim=-1).item()
-                class_name = CLASS_IDX_TO_NAME.get(pred, "Unknown")
-                if class_name != "Safe":
-                    unsafe_count += 1
-
-            if offload_to_cpu:
-                siglip_model = siglip_model.to("cpu")
-                classifier = classifier.to("cpu")
+            try:
+                for frame in frames:
+                    img = Image.fromarray(frame)
+                    inputs = siglip_processor(images=img, return_tensors="pt").to(compute_device, dtype=torch.float32)
+                    with torch.no_grad():
+                        features = siglip_model.get_image_features(**inputs)
+                        features = _extract_siglip_image_features(features)
+                        features = torch.nn.functional.normalize(features, p=2, dim=-1)
+                        logits = classifier(features)
+                        pred = logits.argmax(dim=-1).item()
+                    class_name = CLASS_IDX_TO_NAME.get(pred, "Unknown")
+                    if class_name != "Safe":
+                        unsafe_count += 1
+            finally:
+                if offload_to_cpu:
+                    siglip_model = siglip_model.to("cpu")
+                    classifier = classifier.to("cpu")
 
             if unsafe_count / total > CUTOFF_UNSAFE_FRAMES_PERCENT / 100:
                 return False, f"Video content safety: {unsafe_count}/{total} frames unsafe"
@@ -269,8 +363,7 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
             k.replace("module.", "", 1) if k.startswith("module.") else k: v for k, v in pretrained_dict.items()
         }
         retinaface_net.load_state_dict(pretrained_dict, strict=False)
-        retinaface_device = "cpu" if offload_to_cpu else "cuda"
-        retinaface_net = retinaface_net.to(retinaface_device, dtype=torch.float32).eval()
+        retinaface_net = retinaface_net.to(idle_device, dtype=torch.float32).eval()
 
         CONF_THRESH = 0.7
         NMS_THRESH = 0.4
@@ -294,60 +387,63 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
         def _face_blur(frames: np.ndarray) -> np.ndarray:
             nonlocal retinaface_net
             if offload_to_cpu:
-                retinaface_net = retinaface_net.to("cuda")
+                retinaface_net = retinaface_net.to(compute_device)
 
             prior_data = None
             scale = None
             result_frames = []
 
-            for frame in frames:
-                frame_t = torch.from_numpy(frame).to("cuda", dtype=torch.float32)
-                frame_t = frame_t.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
-                frame_t = frame_t[:, [2, 1, 0], :, :]  # RGB → BGR
-                means = torch.tensor([104.0, 117.0, 123.0], device="cuda", dtype=torch.float32).view(1, 3, 1, 1)
-                frame_t = frame_t - means
+            try:
+                for frame in frames:
+                    frame_t = torch.from_numpy(frame).to(compute_device, dtype=torch.float32)
+                    frame_t = frame_t.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+                    frame_t = frame_t[:, [2, 1, 0], :, :]  # RGB → BGR
+                    means = torch.tensor(
+                        [104.0, 117.0, 123.0], device=compute_device, dtype=torch.float32
+                    ).view(1, 3, 1, 1)
+                    frame_t = frame_t - means
 
-                h, w = frame_t.shape[2], frame_t.shape[3]
-                if prior_data is None:
-                    priorbox = PriorBox(cfg, image_size=(h, w))
-                    prior_data = priorbox.forward().to("cuda", dtype=torch.float32)
-                if scale is None:
-                    scale = torch.tensor([w, h, w, h], device="cuda", dtype=torch.float32)
+                    h, w = frame_t.shape[2], frame_t.shape[3]
+                    if prior_data is None:
+                        priorbox = PriorBox(cfg, image_size=(h, w))
+                        prior_data = priorbox.forward().to(compute_device, dtype=torch.float32)
+                    if scale is None:
+                        scale = torch.tensor([w, h, w, h], device=compute_device, dtype=torch.float32)
 
-                with torch.no_grad():
-                    loc, conf, _ = retinaface_net(frame_t)
+                    with torch.no_grad():
+                        loc, conf, _ = retinaface_net(frame_t)
 
-                boxes = _decode_batch(loc, prior_data, cfg["variance"])
-                boxes = (boxes * scale).squeeze(0).cpu().numpy()
-                scores = conf.squeeze(0)[:, 1].cpu().numpy()
+                    boxes = _decode_batch(loc, prior_data, cfg["variance"])
+                    boxes = (boxes * scale).squeeze(0).cpu().numpy()
+                    scores = conf.squeeze(0)[:, 1].cpu().numpy()
 
-                # Filter by confidence
-                inds = np.where(scores > CONF_THRESH)[0]
-                boxes_f = boxes[inds]
-                scores_f = scores[inds]
-                order = scores_f.argsort()[::-1][:TOP_K]
-                boxes_f = boxes_f[order]
-                scores_f = scores_f[order]
+                    # Filter by confidence
+                    inds = np.where(scores > CONF_THRESH)[0]
+                    boxes_f = boxes[inds]
+                    scores_f = scores[inds]
+                    order = scores_f.argsort()[::-1][:TOP_K]
+                    boxes_f = boxes_f[order]
+                    scores_f = scores_f[order]
 
-                # NMS
-                dets = np.hstack((boxes_f, scores_f[:, np.newaxis])).astype(np.float32)
-                keep = py_cpu_nms(dets, NMS_THRESH)
-                dets = dets[keep][:KEEP_TOP_K]
+                    # NMS
+                    dets = np.hstack((boxes_f, scores_f[:, np.newaxis])).astype(np.float32)
+                    keep = py_cpu_nms(dets, NMS_THRESH)
+                    dets = dets[keep][:KEEP_TOP_K]
 
-                out_frame = frame.copy()
-                for det in dets:
-                    x1, y1, x2, y2 = map(int, det[:4])
-                    if x2 - x1 < 20 or y2 - y1 < 20:
-                        continue
-                    max_h, max_w = out_frame.shape[:2]
-                    y1c, y2c = max(y1, 0), min(y2, max_h)
-                    x1c, x2c = max(x1, 0), min(x2, max_w)
-                    out_frame[y1c:y2c, x1c:x2c] = _pixelate_face(out_frame[y1c:y2c, x1c:x2c])
+                    out_frame = frame.copy()
+                    for det in dets:
+                        x1, y1, x2, y2 = map(int, det[:4])
+                        if x2 - x1 < 20 or y2 - y1 < 20:
+                            continue
+                        max_h, max_w = out_frame.shape[:2]
+                        y1c, y2c = max(y1, 0), min(y2, max_h)
+                        x1c, x2c = max(x1, 0), min(x2, max_w)
+                        out_frame[y1c:y2c, x1c:x2c] = _pixelate_face(out_frame[y1c:y2c, x1c:x2c])
 
-                result_frames.append(out_frame)
-
-            if offload_to_cpu:
-                retinaface_net = retinaface_net.to("cpu")
+                    result_frames.append(out_frame)
+            finally:
+                if offload_to_cpu:
+                    retinaface_net = retinaface_net.to("cpu")
 
             return np.array(result_frames)
 
@@ -361,7 +457,7 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
         if safety_checker is not None:
             is_safe, msg = safety_checker(frames)
             if not is_safe:
-                raise ValueError(f"Guardrail blocked video: {msg}")
+                raise GuardrailViolationError(f"Guardrail blocked video: {msg}")
         if face_blurrer is not None:
             frames = face_blurrer(frames)
         return frames
@@ -378,8 +474,13 @@ def _init_default_guardrails(offload_to_cpu: bool = False) -> None:
         return
     if _is_rank_zero():
         logger.info("Initializing Cosmos3 guardrails (offload_to_cpu=%s)...", offload_to_cpu)
-    _text_guardrail = _build_text_guardrail(offload_to_cpu)
-    _video_guardrail = _build_video_guardrail(offload_to_cpu)
+    # Build into locals first so a partial failure doesn't leave the module
+    # in a half-initialized state (one guardrail set, the other missing,
+    # and `_initialized` still False so the next call retries from scratch).
+    text_fn = _build_text_guardrail(offload_to_cpu)
+    video_fn = _build_video_guardrail(offload_to_cpu)
+    _text_guardrail = text_fn
+    _video_guardrail = video_fn
     _initialized = True
     if _is_rank_zero():
         logger.info("Cosmos3 guardrails initialized.")
@@ -419,10 +520,27 @@ def check_video_safety(video_tensor: torch.Tensor) -> torch.Tensor:
     return result.to(video_tensor.device)
 
 
-def is_guardrails_enabled(od_config: Any) -> bool:
-    return False
+def is_guardrails_enabled(od_config: Any, sampling_params: Any = None) -> bool:
+    """Resolve the active guardrail gate.
+
+    Server-level ``od_config.model_config["guardrails"]`` decides whether the
+    guardrail models are loaded at all (eager load at pipeline build time).
+    When that is False, no per-request override can turn checks back on,
+    because the singletons in this module are never populated.
+
+    When the server gate is on, ``sampling_params.extra_args["guardrails"]``
+    may override on a per-request basis: ``False`` skips the check for that
+    request, anything else (or missing) keeps the default behavior.
+    """
     cfg = getattr(od_config, "model_config", None) or {}
-    return bool(cfg.get("guardrails", True))
+    if not bool(cfg.get("guardrails", True)):
+        return False
+    if sampling_params is not None:
+        extra = getattr(sampling_params, "extra_args", None) or {}
+        per_request = extra.get("guardrails")
+        if per_request is not None:
+            return bool(per_request)
+    return True
 
 
 def get_offload_flag(od_config: Any) -> bool:

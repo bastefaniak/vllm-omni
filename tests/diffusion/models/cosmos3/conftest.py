@@ -136,7 +136,7 @@ def passthrough_progress_bar(iterable):
 @pytest.fixture(autouse=True)
 def fake_cosmos3_guardrails(monkeypatch: pytest.MonkeyPatch):
     module = types.ModuleType("vllm_omni.diffusion.models.cosmos3.guardrails")
-    module.is_guardrails_enabled = lambda od_config: False
+    module.is_guardrails_enabled = lambda od_config, sampling_params=None: False
     module.ensure_initialized = lambda od_config: None
     module.check_text_safety = lambda text: None
     module.check_video_safety = lambda video: video

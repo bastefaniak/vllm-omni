@@ -97,8 +97,10 @@ def get_cosmos3_pre_process_func(od_config: OmniDiffusionConfig):
     from .guardrails import check_text_safety, ensure_initialized, is_guardrails_enabled
 
     video_processor = VideoProcessor(vae_scale_factor=16)
-    guardrails_on = is_guardrails_enabled(od_config)
-    if guardrails_on:
+    # Eager-load guardrail models at pipeline build time when the server-level
+    # gate is on. Per-request overrides only decide whether the loaded models
+    # are *invoked* — they cannot turn checks on without a server-side preload.
+    if is_guardrails_enabled(od_config):
         ensure_initialized(od_config)
 
     def _extra_args(request: OmniDiffusionRequest) -> dict[str, Any]:
@@ -162,7 +164,7 @@ def get_cosmos3_pre_process_func(od_config: OmniDiffusionConfig):
 
     def pre_process_func(request: OmniDiffusionRequest) -> OmniDiffusionRequest:
         action_mode = _request_action_mode(request)
-        if guardrails_on:
+        if is_guardrails_enabled(od_config, request.sampling_params):
             for prompt in request.prompts:
                 text = prompt if isinstance(prompt, str) else prompt.get("prompt", "")
                 check_text_safety(text)
@@ -240,7 +242,6 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
     from .guardrails import check_video_safety, is_guardrails_enabled
 
     video_processor = VideoProcessor(vae_scale_factor=16)
-    guardrails_on = is_guardrails_enabled(od_config)
 
     def _sampling_param(sampling_params, key: str, default=None):
         extra = getattr(sampling_params, "extra_args", None)
@@ -306,12 +307,12 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
                     f"with shape [B, C, 1, H, W], got {tuple(video.shape)}."
                 )
             image = video.squeeze(2)  # [B, 3, H, W]
-            if guardrails_on:
+            if is_guardrails_enabled(od_config, sampling_params):
                 # check_video_safety expects a 5D tensor; re-add T axis.
                 checked = check_video_safety(image.unsqueeze(2))
                 image = checked.squeeze(2)
             return video_processor.postprocess(image, output_type="pil")
-        if guardrails_on:
+        if is_guardrails_enabled(od_config, sampling_params):
             video = check_video_safety(video)
         result = {"video": video_processor.postprocess_video(video, output_type=output_type)}
         if audio is None:
@@ -800,6 +801,15 @@ class Cosmos3OmniDiffusersPipeline(
         token_ids = self._normalize_token_ids(
             self.tokenizer.apply_chat_template(conversations, tokenize=True, add_generation_prompt=True)
         )
+        original_token_count = len(token_ids)
+        if original_token_count > max_sequence_length and _is_rank_zero():
+            logger.warning(
+                "Cosmos3 prompt token_ids shortened to max_sequence_length: "
+                "original_token_count=%d, max_sequence_length=%d, removed_token_count=%d",
+                original_token_count,
+                max_sequence_length,
+                original_token_count - max_sequence_length,
+            )
         token_ids = token_ids[:max_sequence_length]
         token_ids.append(self.tokenizer.eos_token_id)  # 151645
         token_ids.append(self.tokenizer.convert_tokens_to_ids("<|vision_start|>"))  # 151652
