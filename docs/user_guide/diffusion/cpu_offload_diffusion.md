@@ -194,7 +194,7 @@ Factory function `get_offload_backend()` selects the appropriate backend based o
 | OvisImagePipeline | `AIDC-AI/Ovis-Image-7B` | `OvisImageTransformer2DModel` | - | ✓ | `"transformer"` |
 | QwenImagePipeline | `Qwen/Qwen-Image` | `QwenImageTransformer2DModel` | ✓ | ✓ | `"transformer_blocks"` |
 | StableDiffusion3Pipeline | `stabilityai/stable-diffusion-3.5-medium` | `SD3Transformer2DModel` | - | ✓ | `"transformer_blocks"` |
-| Cosmos3OmniDiffusersPipeline | `$COSMOS3_MODEL` | `Cosmos3VFMTransformer` | - | ✓ | `"gen_layers"` |
+| Cosmos3OmniDiffusersPipeline | `nvidia/Cosmos3-Nano` | `Cosmos3VFMTransformer` | - | ✓ | `"gen_layers"` |
 | Wan22I2VPipeline | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | Wan22Pipeline | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | BagelPipeline | `ByteDance-Seed/BAGEL-7B-MoT` | `Qwen2MoTModel` | - | ✓ | `"layers"`, `"customized modules"` |

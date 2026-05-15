@@ -72,8 +72,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cosmos3 offline inference examples.")
     parser.add_argument(
         "--model",
-        default=os.environ.get("COSMOS3_MODEL"),
-        help="Local Diffusers-format Cosmos3 checkpoint. Defaults to COSMOS3_MODEL.",
+        default=os.environ.get("COSMOS3_MODEL", "nvidia/Cosmos3-Nano"),
+        help="Cosmos3 checkpoint (Hugging Face repo id or local Diffusers-format path). "
+        "Defaults to COSMOS3_MODEL when set, otherwise nvidia/Cosmos3-Nano.",
     )
     parser.add_argument(
         "--task",
@@ -411,8 +412,6 @@ def _build_omni(args: argparse.Namespace) -> Omni:
 
 def main() -> None:
     args = parse_args()
-    if not args.model:
-        raise ValueError("Set COSMOS3_MODEL or pass --model with a Cosmos3 Diffusers checkpoint path.")
 
     defaults = TASK_DEFAULTS[args.task]
     height = args.height or defaults["height"]

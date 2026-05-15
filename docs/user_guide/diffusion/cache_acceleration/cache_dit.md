@@ -132,10 +132,9 @@ For Cosmos3 text-to-video or image-to-video, use the video examples with the Cos
 
 ```bash
 cd examples/offline_inference/text_to_video
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
 
 python text_to_video.py \
-    --model "$COSMOS3_MODEL" \
+    --model nvidia/Cosmos3-Nano \
     --model-class-name Cosmos3OmniDiffusersPipeline \
     --prompt "A small warehouse robot moves a blue box across a clean floor." \
     --cache-backend cache_dit \
@@ -156,7 +155,7 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
   --cache-config '{"Fn_compute_blocks": 1, "residual_diff_threshold": 0.12}'
 
 # Cosmos3
-vllm serve "$COSMOS3_MODEL" --omni --port 8091 \
+vllm serve nvidia/Cosmos3-Nano --omni --port 8091 \
   --model-class-name Cosmos3OmniDiffusersPipeline \
   --cache-backend cache_dit
 ```

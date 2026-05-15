@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
         default="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         help="Diffusers model ID or local path. "
         "Examples: Wan-AI/Wan2.2-T2V-A14B-Diffusers, "
-        "hunyuanvideo-community/HunyuanVideo-1.5-480p_t2v, $COSMOS3_MODEL",
+        "hunyuanvideo-community/HunyuanVideo-1.5-480p_t2v, nvidia/Cosmos3-Nano",
     )
     parser.add_argument(
         "--model-class-name",

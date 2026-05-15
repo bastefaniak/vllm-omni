@@ -33,7 +33,7 @@ Usage:
         --flow-shift 5.0 --guidance-scale 6.0
 
     # Cosmos3 image-to-video
-    python image_to_video.py --model "$COSMOS3_MODEL" \
+    python image_to_video.py --model nvidia/Cosmos3-Nano \
         --model-class-name Cosmos3OmniDiffusersPipeline \
         --image input.jpg --prompt "A cinematic dolly shot of a boat" \
         --height 720 --width 1280 --num-frames 81 \

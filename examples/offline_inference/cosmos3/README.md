@@ -1,9 +1,8 @@
 # Cosmos3
 
-Cosmos3 uses `Cosmos3OmniDiffusersPipeline` for text-to-image, text-to-video, image-to-video, video-with-sound, and action generation. Set `COSMOS3_MODEL` to a local Diffusers-format checkpoint before running these examples.
+Cosmos3 uses `Cosmos3OmniDiffusersPipeline` for text-to-image, text-to-video, image-to-video, video-with-sound, and action generation. Examples default to the `nvidia/Cosmos3-Nano` Hugging Face repo, but you can override the checkpoint with `--model` or by exporting `COSMOS3_MODEL` to a local Diffusers-format checkpoint.
 
 ```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
 cd examples/offline_inference/cosmos3
 ```
 

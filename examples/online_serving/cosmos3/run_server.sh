@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-MODEL="${MODEL:-${COSMOS3_MODEL:-}}"
+MODEL="${MODEL:-${COSMOS3_MODEL:-nvidia/Cosmos3-Nano}}"
 PORT="${PORT:-8091}"
 CACHE_BACKEND="${CACHE_BACKEND:-none}"
 ENABLE_LAYERWISE_OFFLOAD="${ENABLE_LAYERWISE_OFFLOAD:-0}"
@@ -12,11 +12,6 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 ULYSSES_DEGREE="${ULYSSES_DEGREE:-1}"
 USE_HSDP="${USE_HSDP:-0}"
 ALLOWED_LOCAL_MEDIA_PATH="${ALLOWED_LOCAL_MEDIA_PATH:-/}"
-
-if [ -z "${MODEL}" ]; then
-  echo "Set COSMOS3_MODEL or MODEL to a local Diffusers-format Cosmos3 checkpoint."
-  exit 1
-fi
 
 args=(
   vllm serve "${MODEL}"

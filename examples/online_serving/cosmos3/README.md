@@ -2,17 +2,16 @@
 
 This example shows Cosmos3 online serving with `Cosmos3OmniDiffusersPipeline`.
 
-Set `COSMOS3_MODEL` to a local Diffusers-format checkpoint before starting the server:
+The server defaults to the `nvidia/Cosmos3-Nano` Hugging Face repo. Override the checkpoint by exporting `MODEL` or `COSMOS3_MODEL` to a local Diffusers-format checkpoint.
 
 ```bash
-export COSMOS3_MODEL=/path/to/cosmos3-diffusers
 cd examples/online_serving/cosmos3
 bash run_server.sh
 ```
 
 `run_server.sh` accepts these environment overrides:
 
-- `MODEL`: checkpoint path, defaults to `COSMOS3_MODEL`
+- `MODEL`: checkpoint path or Hugging Face repo, defaults to `nvidia/Cosmos3-Nano` (or `COSMOS3_MODEL` if set)
 - `PORT`: server port, defaults to `8091`
 - `CACHE_BACKEND`: set to `cache_dit` to enable Cache-DiT
 - `ENABLE_LAYERWISE_OFFLOAD`: set to `1` to enable layerwise offload
