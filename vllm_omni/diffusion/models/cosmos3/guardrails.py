@@ -105,9 +105,7 @@ def _move_tokenizer_output_to_device(tokenizer_output: object, device: str) -> o
     if hasattr(tokenizer_output, "to"):
         return tokenizer_output.to(device)
     if isinstance(tokenizer_output, Mapping):
-        return {
-            key: value.to(device) if hasattr(value, "to") else value for key, value in tokenizer_output.items()
-        }
+        return {key: value.to(device) if hasattr(value, "to") else value for key, value in tokenizer_output.items()}
     return tokenizer_output
 
 
@@ -398,9 +396,9 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
                     frame_t = torch.from_numpy(frame).to(compute_device, dtype=torch.float32)
                     frame_t = frame_t.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
                     frame_t = frame_t[:, [2, 1, 0], :, :]  # RGB → BGR
-                    means = torch.tensor(
-                        [104.0, 117.0, 123.0], device=compute_device, dtype=torch.float32
-                    ).view(1, 3, 1, 1)
+                    means = torch.tensor([104.0, 117.0, 123.0], device=compute_device, dtype=torch.float32).view(
+                        1, 3, 1, 1
+                    )
                     frame_t = frame_t - means
 
                     h, w = frame_t.shape[2], frame_t.shape[3]

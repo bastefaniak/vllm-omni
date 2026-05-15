@@ -275,10 +275,7 @@ def test_from_config_uses_component_config_architecture_values(
     tokenizer_dir.mkdir(parents=True)
     (tokenizer_dir / "model.safetensors").write_bytes(b"stub")
     (tokenizer_dir / "config.json").write_text(
-        (
-            '{"sampling_rate": 48000, "dec_out_channels": 2, '
-            '"vocoder_input_dim": 64, "hop_size": 1920}'
-        ),
+        ('{"sampling_rate": 48000, "dec_out_channels": 2, "vocoder_input_dim": 64, "hop_size": 1920}'),
         encoding="utf-8",
     )
 
@@ -328,10 +325,7 @@ def test_from_config_rejects_custom_architecture_conflict_with_component_config(
     tokenizer_dir.mkdir(parents=True)
     (tokenizer_dir / "model.safetensors").write_bytes(b"stub")
     (tokenizer_dir / "config.json").write_text(
-        (
-            '{"sampling_rate": 48000, "dec_out_channels": 2, '
-            '"vocoder_input_dim": 64, "hop_size": 1920}'
-        ),
+        ('{"sampling_rate": 48000, "dec_out_channels": 2, "vocoder_input_dim": 64, "hop_size": 1920}'),
         encoding="utf-8",
     )
 
