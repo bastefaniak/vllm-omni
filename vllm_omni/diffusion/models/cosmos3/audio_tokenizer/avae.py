@@ -1,22 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Local AVAE audio tokenizer used by Cosmos3 sound generation."""
+"""Diffusers-format AVAE audio tokenizer used by Cosmos3 sound generation."""
 
 from __future__ import annotations
 
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 import torch
-import torch.nn.functional as F
 from torch import nn
+from torch.nn.utils import weight_norm
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.models.progress_bar import _is_rank_zero
-
-from .config import AttrDict
-from .models import load_generator
 
 logger = init_logger(__name__)
 
@@ -27,49 +25,29 @@ def _default_avae_config(
     audio_channels: int,
     io_channels: int,
     hop_size: int,
-) -> AttrDict:
-    return AttrDict(
-        {
-            "model_type": "autoencoder_v2",
-            "sampling_rate": sample_rate,
-            "stereo": audio_channels == 2,
-            "use_wav_as_input": True,
-            "normalize_volume": True,
-            "hop_size": hop_size,
-            "input_channels": 1,
-            "enc_type": "spec_convnext",
-            "enc_dim": 192,
-            "enc_intermediate_dim": 768,
-            "enc_num_layers": 12,
-            "enc_num_blocks": 2,
-            "enc_n_fft": 64,
-            "enc_hop_length": 16,
-            "enc_latent_dim": 128,
-            "enc_c_mults": [1, 2, 4],
-            "enc_strides": [4, 5, 6],
-            "enc_identity_init": False,
-            "enc_use_snake": True,
-            "dec_type": "oobleck",
-            "dec_dim": 320,
-            "dec_c_mults": [1, 2, 4, 8, 16],
-            "dec_strides": [2, 4, 5, 6, 8],
-            "dec_use_snake": True,
-            "dec_final_tanh": False,
-            "dec_out_channels": audio_channels,
-            "dec_anti_aliasing": False,
-            "dec_use_nearest_upsample": False,
-            "dec_use_tanh_at_final": False,
-            "bottleneck_type": "vae",
-            "bottleneck": {"type": "vae"},
-            "activation": "snakebeta",
-            "snake_logscale": True,
-            "anti_aliasing": False,
-            "use_cuda_kernel": False,
-            "causal": False,
-            "padding_mode": "zeros",
-            "vocoder_input_dim": io_channels,
-        }
-    )
+) -> dict[str, Any]:
+    return {
+        "sampling_rate": sample_rate,
+        "hop_size": hop_size,
+        "dec_dim": 320,
+        "dec_c_mults": [1, 2, 4, 8, 16],
+        "dec_strides": [2, 4, 5, 6, 8],
+        "dec_out_channels": audio_channels,
+        "vocoder_input_dim": io_channels,
+        "normalization_type": "none",
+        "normalize_latents": False,
+        "tanh_input_scale": 1.5,
+        "tanh_output_scale": 3.5,
+        "tanh_clamp": 0.995,
+    }
+
+
+def _config_get(config: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        value = config.get(key)
+        if value is not None:
+            return value
+    return default
 
 
 def _load_config(
@@ -79,10 +57,13 @@ def _load_config(
     audio_channels: int,
     io_channels: int,
     hop_size: int,
-) -> AttrDict:
+) -> dict[str, Any]:
     if config_path:
         with open(config_path, encoding="utf-8") as f:
-            return AttrDict(json.load(f))
+            config = json.load(f)
+        if not isinstance(config, dict):
+            raise TypeError(f"Cosmos3 AVAE config must be a JSON object, got {type(config)!r}.")
+        return config
     return _default_avae_config(
         sample_rate=sample_rate,
         audio_channels=audio_channels,
@@ -103,48 +84,127 @@ def _load_checkpoint(path: str | Path, map_location: torch.device | str) -> dict
         checkpoint = torch.load(path, map_location=map_location)
 
     if not isinstance(checkpoint, dict):
-        raise TypeError(f"AVAE checkpoint must be a dict, got {type(checkpoint)!r}.")
-
-    for key in ("generator", "state_dict", "model"):
-        value = checkpoint.get(key)
-        if isinstance(value, dict):
-            checkpoint = value
-            break
-
+        raise TypeError(f"AVAE checkpoint must be a flat state dict, got {type(checkpoint)!r}.")
     if not all(isinstance(value, torch.Tensor) for value in checkpoint.values()):
-        tensor_items = {key: value for key, value in checkpoint.items() if isinstance(value, torch.Tensor)}
-        if not tensor_items:
-            raise RuntimeError(f"No tensor state dict found in AVAE checkpoint keys: {list(checkpoint.keys())[:16]}")
-        checkpoint = tensor_items
-
+        raise TypeError("AVAE checkpoint must be a flat tensor state dict.")
     return checkpoint
 
 
-def _strip_prefixes(
-    state_dict: dict[str, torch.Tensor],
-    model_state: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    prefixes = ("module.", "generator.", "model.")
-    normalized: dict[str, torch.Tensor] = {}
-    for key, value in state_dict.items():
-        candidates = [key]
-        current = key
-        changed = True
-        while changed:
-            changed = False
-            for prefix in prefixes:
-                if current.startswith(prefix):
-                    current = current[len(prefix) :]
-                    candidates.append(current)
-                    changed = True
-                    break
-        selected = next((candidate for candidate in candidates if candidate in model_state), candidates[-1])
-        normalized[selected] = value
-    return normalized
+def _validate_diffusers_state_dict(state_dict: dict[str, torch.Tensor]) -> None:
+    if not state_dict:
+        raise RuntimeError("AVAE checkpoint is empty.")
+
+    if not any(key.startswith("decoder.") for key in state_dict):
+        raise RuntimeError("Cosmos3 AVAE checkpoint must contain diffusers-format decoder.* keys.")
+
+
+class Snake1d(nn.Module):
+    """One-dimensional Snake activation matching diffusers' Oobleck layout."""
+
+    def __init__(self, hidden_dim: int, logscale: bool = True) -> None:
+        super().__init__()
+        self.alpha = nn.Parameter(torch.zeros(1, hidden_dim, 1))
+        self.beta = nn.Parameter(torch.zeros(1, hidden_dim, 1))
+        self.logscale = logscale
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        shape = hidden_states.shape
+        alpha = torch.exp(self.alpha) if self.logscale else self.alpha
+        beta = torch.exp(self.beta) if self.logscale else self.beta
+        hidden_states = hidden_states.reshape(shape[0], shape[1], -1)
+        hidden_states = hidden_states + (beta + 1e-9).reciprocal() * torch.sin(alpha * hidden_states).pow(2)
+        return hidden_states.reshape(shape)
+
+
+class OobleckResidualUnit(nn.Module):
+    """Residual unit used by the diffusers Oobleck decoder."""
+
+    def __init__(self, dimension: int = 16, dilation: int = 1) -> None:
+        super().__init__()
+        pad = ((7 - 1) * dilation) // 2
+        self.snake1 = Snake1d(dimension)
+        self.conv1 = weight_norm(nn.Conv1d(dimension, dimension, kernel_size=7, dilation=dilation, padding=pad))
+        self.snake2 = Snake1d(dimension)
+        self.conv2 = weight_norm(nn.Conv1d(dimension, dimension, kernel_size=1))
+
+    def forward(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        output_tensor = self.conv1(self.snake1(hidden_state))
+        output_tensor = self.conv2(self.snake2(output_tensor))
+        padding = (hidden_state.shape[-1] - output_tensor.shape[-1]) // 2
+        if padding > 0:
+            hidden_state = hidden_state[..., padding:-padding]
+        return hidden_state + output_tensor
+
+
+class OobleckDecoderBlock(nn.Module):
+    """Decoder block used by the diffusers Oobleck decoder."""
+
+    def __init__(self, input_dim: int, output_dim: int, stride: int = 1, output_padding: int = 0) -> None:
+        super().__init__()
+        self.snake1 = Snake1d(input_dim)
+        self.conv_t1 = weight_norm(
+            nn.ConvTranspose1d(
+                input_dim,
+                output_dim,
+                kernel_size=2 * stride,
+                stride=stride,
+                padding=math.ceil(stride / 2),
+                output_padding=output_padding,
+            )
+        )
+        self.res_unit1 = OobleckResidualUnit(output_dim, dilation=1)
+        self.res_unit2 = OobleckResidualUnit(output_dim, dilation=3)
+        self.res_unit3 = OobleckResidualUnit(output_dim, dilation=9)
+
+    def forward(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        hidden_state = self.snake1(hidden_state)
+        hidden_state = self.conv_t1(hidden_state)
+        hidden_state = self.res_unit1(hidden_state)
+        hidden_state = self.res_unit2(hidden_state)
+        return self.res_unit3(hidden_state)
+
+
+class OobleckDecoder(nn.Module):
+    """Diffusers-compatible Oobleck decoder for Cosmos3 AVAE latents."""
+
+    def __init__(
+        self,
+        channels: int,
+        input_channels: int,
+        audio_channels: int,
+        upsampling_ratios: list[int],
+        channel_multiples: list[int],
+    ) -> None:
+        super().__init__()
+        strides = upsampling_ratios
+        channel_multiples = [1] + channel_multiples
+
+        self.conv1 = weight_norm(nn.Conv1d(input_channels, channels * channel_multiples[-1], kernel_size=7, padding=3))
+
+        block = []
+        for stride_index, stride in enumerate(strides):
+            block.append(
+                OobleckDecoderBlock(
+                    input_dim=channels * channel_multiples[len(strides) - stride_index],
+                    output_dim=channels * channel_multiples[len(strides) - stride_index - 1],
+                    stride=stride,
+                    output_padding=stride % 2,
+                )
+            )
+        self.block = nn.ModuleList(block)
+        self.snake1 = Snake1d(channels)
+        self.conv2 = weight_norm(nn.Conv1d(channels, audio_channels, kernel_size=7, padding=3, bias=False))
+
+    def forward(self, hidden_state: torch.Tensor) -> torch.Tensor:
+        hidden_state = self.conv1(hidden_state)
+        for layer in self.block:
+            hidden_state = layer(hidden_state)
+        hidden_state = self.snake1(hidden_state)
+        return self.conv2(hidden_state)
 
 
 class Cosmos3AVAEAudioTokenizer(nn.Module):
-    """AVAE tokenizer/decoder for Cosmos3 audio latents."""
+    """Decoder-only AVAE tokenizer for Cosmos3 audio latents."""
 
     def __init__(
         self,
@@ -164,63 +224,63 @@ class Cosmos3AVAEAudioTokenizer(nn.Module):
         device: torch.device | str = "cuda",
     ) -> None:
         super().__init__()
-        self.sample_rate = int(sample_rate)
-        self.audio_channels = int(audio_channels)
-        self.latent_ch = int(io_channels)
-        self.hop_size = int(hop_size)
         self.dtype = dtype
         self.device = torch.device(device)
-        self.normalize_volume = True
-
-        if normalization_type == "none" and normalize_latents:
-            normalization_type = "tanh"
-        self.normalization_type = normalization_type
-        self.tanh_input_scale = float(tanh_input_scale)
-        self.tanh_output_scale = float(tanh_output_scale)
-        self.tanh_clamp = float(tanh_clamp)
 
         config = _load_config(
             config_path,
-            sample_rate=self.sample_rate,
-            audio_channels=self.audio_channels,
-            io_channels=self.latent_ch,
-            hop_size=self.hop_size,
+            sample_rate=sample_rate,
+            audio_channels=audio_channels,
+            io_channels=io_channels,
+            hop_size=hop_size,
         )
-        self.sample_rate = int(config.sampling_rate)
+        self.sample_rate = int(_config_get(config, "sampling_rate", "sample_rate", default=sample_rate))
         self.audio_channels = int(
-            getattr(config, "dec_out_channels", 2 if bool(getattr(config, "stereo", True)) else 1)
+            _config_get(
+                config,
+                "dec_out_channels",
+                "audio_channels",
+                default=2 if bool(config.get("stereo", audio_channels == 2)) else 1,
+            )
         )
-        self.latent_ch = int(config.vocoder_input_dim)
-        self.hop_size = int(config.hop_size)
-        dec_stride_product = math.prod(int(stride) for stride in config.dec_strides)
+        self.latent_ch = int(_config_get(config, "vocoder_input_dim", "io_channels", "latent_ch", default=io_channels))
+        dec_strides = [int(stride) for stride in _config_get(config, "dec_strides", default=[2, 4, 5, 6, 8])]
+        self.hop_size = int(
+            _config_get(config, "hop_size", default=math.prod(dec_strides) if dec_strides else hop_size)
+        )
+        dec_stride_product = math.prod(dec_strides)
         if dec_stride_product != self.hop_size:
             raise ValueError(
                 "Cosmos3 AVAE config dec_strides product must equal hop_size "
                 f"for correct latent/audio duration math: product={dec_stride_product}, hop_size={self.hop_size}."
             )
-        self.model = load_generator(config.model_type, config, self.device)
-        state_dict = _strip_prefixes(
-            _load_checkpoint(checkpoint_path, self.device),
-            self.model.state_dict(),
-        )
-        matching_keys = set(state_dict).intersection(self.model.state_dict())
-        if not matching_keys:
-            raise RuntimeError("AVAE checkpoint did not contain any keys matching the local AVAE model.")
-        missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
-        if _is_rank_zero():
-            logger.info(
-                "Loaded Cosmos3 AVAE checkpoint from %s; missing=%d unexpected=%d",
-                checkpoint_path,
-                len(missing),
-                len(unexpected),
-            )
 
-        self.model.eval()
-        for param in self.model.parameters():
+        normalization_type = str(_config_get(config, "normalization_type", default=normalization_type))
+        normalize_latents = bool(_config_get(config, "normalize_latents", default=normalize_latents))
+        if normalization_type == "none" and normalize_latents:
+            normalization_type = "tanh"
+        self.normalization_type = normalization_type
+        self.tanh_input_scale = float(_config_get(config, "tanh_input_scale", default=tanh_input_scale))
+        self.tanh_output_scale = float(_config_get(config, "tanh_output_scale", default=tanh_output_scale))
+        self.tanh_clamp = float(_config_get(config, "tanh_clamp", default=tanh_clamp))
+
+        self.decoder = OobleckDecoder(
+            channels=int(_config_get(config, "dec_dim", default=320)),
+            input_channels=self.latent_ch,
+            audio_channels=self.audio_channels,
+            upsampling_ratios=list(reversed(dec_strides)),
+            channel_multiples=list(_config_get(config, "dec_c_mults", default=[1, 2, 4, 8, 16])),
+        )
+        state_dict = _load_checkpoint(checkpoint_path, self.device)
+        _validate_diffusers_state_dict(state_dict)
+        self.load_state_dict(state_dict, strict=True)
+
+        self.eval()
+        for param in self.parameters():
             param.requires_grad = False
-        if hasattr(self.model, "remove_weight_norm"):
-            self.model.remove_weight_norm()
-        self.model.to(dtype=self.dtype)
+        self.to(device=self.device, dtype=self.dtype)
+        if _is_rank_zero():
+            logger.info("Loaded diffusers-format Cosmos3 AVAE checkpoint from %s", checkpoint_path)
 
     @property
     def temporal_compression_factor(self) -> int:
@@ -231,14 +291,6 @@ class Cosmos3AVAEAudioTokenizer(nn.Module):
 
     def get_audio_num_samples(self, num_latent_samples: int) -> int:
         return int(num_latent_samples) * self.temporal_compression_factor
-
-    def _normalize_latent(self, latent: torch.Tensor) -> torch.Tensor:
-        if self.normalization_type == "tanh":
-            in_dtype = latent.dtype
-            return (torch.tanh(latent.float() / self.tanh_input_scale) * self.tanh_output_scale).to(in_dtype)
-        if self.normalization_type != "none":
-            raise ValueError(f"Unsupported AVAE normalization_type={self.normalization_type!r}.")
-        return latent
 
     def _denormalize_latent(self, latent: torch.Tensor) -> torch.Tensor:
         if self.normalization_type == "tanh":
@@ -255,30 +307,15 @@ class Cosmos3AVAEAudioTokenizer(nn.Module):
 
     @torch.no_grad()
     def encode(self, audio: torch.Tensor, force_pad: bool = False) -> torch.Tensor:
-        in_dtype = audio.dtype
-        x = audio.to(self.device)
-        if x.ndim != 3:
-            raise ValueError(f"AVAE audio input must be [B, C, T], got {tuple(x.shape)}.")
-        if x.shape[1] == 1 and self.audio_channels == 2:
-            x = x.repeat(1, 2, 1)
-        elif x.shape[1] > self.audio_channels:
-            x = x[:, : self.audio_channels]
-        if self.normalize_volume:
-            x = x / (x.abs().amax(dim=(-2, -1), keepdim=True) + 1e-5) * 0.95
-        if force_pad or not self.model.training:
-            pad_amount = (self.hop_size - (x.shape[-1] % self.hop_size)) % self.hop_size
-            if pad_amount:
-                x = F.pad(x, (0, pad_amount), mode="constant", value=0)
-        encoded = self.model.encode(x.to(self.dtype))
-        latent = encoded["latent"] if isinstance(encoded, dict) else encoded
-        return self._normalize_latent(latent).to(in_dtype)
+        del audio, force_pad
+        raise NotImplementedError("Cosmos3AVAEAudioTokenizer is decoder-only for diffusers-format sound_tokenizer/.")
 
     @torch.no_grad()
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         in_dtype = latent.dtype
+        squeeze = latent.ndim == 2
+        if squeeze:
+            latent = latent.unsqueeze(0)
         z = self._denormalize_latent(latent.to(self.device)).to(self.dtype)
-        decoded = self.model.decode(z)
-        if not isinstance(decoded, dict) or "decoder_out" not in decoded:
-            raise RuntimeError("AVAE decoder did not return decoder_out.")
-        audio = decoded["decoder_out"].clamp(-1.0, 1.0)
-        return audio.to(in_dtype)
+        audio = self.decoder(z).clamp(-1.0, 1.0).to(in_dtype)
+        return audio.squeeze(0) if squeeze else audio

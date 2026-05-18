@@ -399,11 +399,10 @@ class TimestepEmbedder(nn.Module):
         target_dtype: torch.dtype = torch.bfloat16,
     ) -> None:
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
-        )
+        # Following diffusers naming pattern here for checkpoint compatibility.
+        self.linear_1 = nn.Linear(frequency_embedding_size, hidden_size, bias=True)
+        self.act = nn.SiLU()
+        self.linear_2 = nn.Linear(hidden_size, hidden_size, bias=True)
         self.frequency_embedding_size = frequency_embedding_size
         self.hidden_size = hidden_size
 
@@ -414,7 +413,7 @@ class TimestepEmbedder(nn.Module):
     def forward(self, t: torch.Tensor) -> torch.Tensor:
         args = t[:, None] * self.freqs[None]
         t_freq = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        return self.mlp(t_freq)
+        return self.linear_2(self.act(self.linear_1(t_freq)))
 
 
 # ---------------------------------------------------------------------------

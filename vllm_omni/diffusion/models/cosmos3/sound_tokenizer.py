@@ -31,7 +31,7 @@ DEFAULT_SOUND_TANH_INPUT_SCALE = 1.5
 DEFAULT_SOUND_TANH_OUTPUT_SCALE = 3.5
 DEFAULT_SOUND_TANH_CLAMP = 0.995
 SOUND_TOKENIZER_COMPONENT_NAME = "sound_tokenizer"
-SOUND_TOKENIZER_CHECKPOINT_NAME = "model.safetensors"
+SOUND_TOKENIZER_CHECKPOINT_NAME = "diffusion_pytorch_model.safetensors"
 
 
 def _pipeline_args(od_config: OmniDiffusionConfig) -> dict[str, Any]:
@@ -392,7 +392,7 @@ class Cosmos3SoundTokenizer:
                 "tokenizer checkpoint was provided. Set "
                 "custom_pipeline_args['sound_tokenizer_path'] or "
                 "COSMOS3_SOUND_TOKENIZER_PATH, or include "
-                "sound_tokenizer/model.safetensors under the model path."
+                f"{SOUND_TOKENIZER_COMPONENT_NAME}/{SOUND_TOKENIZER_CHECKPOINT_NAME} under the model path."
             )
 
         config_path = _resolve_model_file(explicit_config_path, model_root)
