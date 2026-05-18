@@ -102,12 +102,15 @@ class OmniRequestOutput:
 
     # error handling
     error: str | None = None
+    error_type: str | None = None
 
     @classmethod
     def from_error(
         cls,
         request_id: str,
         error_message: str,
+        *,
+        error_type: str | None = None,
     ) -> "OmniRequestOutput":
         """Create a terminal error output.
 
@@ -122,6 +125,7 @@ class OmniRequestOutput:
             request_id=request_id,
             finished=True,
             error=error_message,
+            error_type=error_type,
         )
 
     @classmethod

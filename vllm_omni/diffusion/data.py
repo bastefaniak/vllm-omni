@@ -6,6 +6,7 @@ import os
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 import diffusers
@@ -915,6 +916,7 @@ class DiffusionOutput:
     trajectory_log_probs: torch.Tensor | dict | None = None
     trajectory_decoded: list[Image.Image] | None = None
     error: str | None = None
+    error_type: str | None = None
     aborted: bool = False
     abort_message: str | None = None
 
@@ -940,6 +942,18 @@ class DiffusionRequestAbortedError(RuntimeError):
 
 class GuardrailViolationError(ValueError):
     """Raised when a guardrail blocks user input or generated output."""
+
+
+class DiffusionErrorType(str, Enum):
+    """Stable, serializable identifiers for recoverable diffusion errors."""
+
+    GUARDRAIL_VIOLATION = "guardrail_violation"
+
+
+def diffusion_error_type_from_exception(exc: BaseException) -> DiffusionErrorType | None:
+    if isinstance(exc, GuardrailViolationError):
+        return DiffusionErrorType.GUARDRAIL_VIOLATION
+    return None
 
 
 @dataclass

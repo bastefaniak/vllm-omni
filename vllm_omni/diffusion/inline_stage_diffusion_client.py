@@ -17,7 +17,7 @@ from PIL import Image
 from vllm.logger import init_logger
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.diffusion.data import DiffusionRequestAbortedError
+from vllm_omni.diffusion.data import DiffusionRequestAbortedError, diffusion_error_type_from_exception
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.engine.stage_client import StageClientBase
@@ -135,6 +135,7 @@ class InlineStageDiffusionClient(StageClientBase):
                 images=[],
             )
             error_output.error = str(e)
+            error_output.error_type = diffusion_error_type_from_exception(e)
             self._output_queue.put_nowait(error_output)
         finally:
             self._tasks.pop(request_id, None)
@@ -241,6 +242,7 @@ class InlineStageDiffusionClient(StageClientBase):
                 images=[],
             )
             error_output.error = str(e)
+            error_output.error_type = diffusion_error_type_from_exception(e)
             self._output_queue.put_nowait(error_output)
         finally:
             self._tasks.pop(request_id, None)

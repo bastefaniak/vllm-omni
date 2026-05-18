@@ -219,6 +219,7 @@ class StageDiffusionClient(StageClientBase):
                 req_id = msg.get("request_id")
                 rpc_id = msg.get("rpc_id")
                 error_msg = msg.get("error")
+                error_type = msg.get("error_type")
                 logger.error(
                     "[StageDiffusionClient] stage-%s [rep-%s] subprocess error for %s: %s",
                     self.stage_id,
@@ -235,7 +236,13 @@ class StageDiffusionClient(StageClientBase):
                 # Route request errors as error outputs so the Orchestrator
                 # sees the request complete (instead of hanging forever).
                 if req_id is not None:
-                    self._output_queue.put_nowait(OmniRequestOutput.from_error(req_id, error_msg))
+                    self._output_queue.put_nowait(
+                        OmniRequestOutput.from_error(
+                            req_id,
+                            error_msg,
+                            error_type=error_type,
+                        )
+                    )
 
     # Fields that are subprocess-local and cannot be serialized across
     # process boundaries.  They are recreated in the subprocess with

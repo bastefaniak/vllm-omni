@@ -33,6 +33,7 @@ from vllm_omni.diffusion.data import (
     OmniDiffusionConfig,
     OmniSleepTask,
     OmniWakeTask,
+    diffusion_error_type_from_exception,
 )
 from vllm_omni.diffusion.distributed.parallel_state import (
     destroy_distributed_env,
@@ -752,7 +753,12 @@ class WorkerProc:
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
                     if self.result_mq is not None:
-                        self.return_result(DiffusionOutput(error=str(e)))
+                        self.return_result(
+                            DiffusionOutput(
+                                error=str(e),
+                                error_type=diffusion_error_type_from_exception(e),
+                            )
+                        )
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
@@ -768,7 +774,10 @@ class WorkerProc:
                         f"Error executing forward in event loop: {e}",
                         exc_info=True,
                     )
-                    output = DiffusionOutput(error=str(e))
+                    output = DiffusionOutput(
+                        error=str(e),
+                        error_type=diffusion_error_type_from_exception(e),
+                    )
 
                 try:
                     self.return_result(output)
