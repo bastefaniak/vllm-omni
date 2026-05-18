@@ -996,7 +996,7 @@ class Cosmos3VFMTransformer(nn.Module):
 
     _repeated_blocks = ["Cosmos3GenDecoderLayer"]
 
-    _layerwise_offload_blocks_attr = "gen_layers"
+    _layerwise_offload_blocks_attrs = ["gen_layers"]
 
     packed_modules_mapping = {}
 
