@@ -151,7 +151,6 @@ The following tables show which models support each feature:
 | **HunyuanVideo-1.5 T2V I2V** |     ❌     |     ✅      |           ❌           |       ✅        |         ✅         |         ❌         |   ✅    |             ✅             |      ✅ (decode)      |       ✅        |        ❌         |
 | **DreamID-Omni**             |     ❌     |     ❌      |           ❌           |       ✅        |         ❌         |         ❌         |   ✅    |             ✅             |          ❌           |       ❌        |        ❌         |
 | **Cosmos3**                  |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ❌         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ✅        |        ❌         |
-| **Cosmos3**                  | ❌ | ✅ | ✅ (Ulysses) | ✅ | ✅ | ✅ | ✅ | ✅ (encode/decode) | ✅ | ❌ |
 
 > Notes:
 > 1. Cosmos3 T2V and I2V use `Cosmos3OmniDiffusersPipeline` with video output. I2V is selected when the request includes an input image. Model-level CPU offload is not supported; use layerwise offload.
