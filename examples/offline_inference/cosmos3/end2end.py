@@ -2,9 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
+import hashlib
 import json
 import os
+import sys
+import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -21,38 +26,42 @@ from vllm_omni.platforms import current_omni_platform
 DEFAULT_NEGATIVE_PROMPT = "blurry, distorted, low quality"
 TASK_DEFAULTS = {
     "t2i": {
-        "height": 1024,
-        "width": 1024,
+        "height": 960,
+        "width": 960,
         "num_frames": None,
         "num_inference_steps": 50,
-        "guidance_scale": 7.0,
+        "guidance_scale": 4.0,
+        "flow_shift": 3.0,
         "fps": 24,
         "output": "cosmos3_t2i.png",
     },
     "t2v": {
         "height": 720,
         "width": 1280,
-        "num_frames": 81,
+        "num_frames": 189,
         "num_inference_steps": 35,
-        "guidance_scale": 4.0,
+        "guidance_scale": 6.0,
+        "flow_shift": 10.0,
         "fps": 24,
         "output": "cosmos3_t2v.mp4",
     },
     "i2v": {
         "height": 720,
         "width": 1280,
-        "num_frames": 81,
+        "num_frames": 189,
         "num_inference_steps": 35,
-        "guidance_scale": 4.0,
+        "guidance_scale": 6.0,
+        "flow_shift": 10.0,
         "fps": 24,
         "output": "cosmos3_i2v.mp4",
     },
     "t2v_sound": {
         "height": 720,
         "width": 1280,
-        "num_frames": 81,
+        "num_frames": 189,
         "num_inference_steps": 35,
-        "guidance_scale": 4.0,
+        "guidance_scale": 6.0,
+        "flow_shift": 10.0,
         "fps": 24,
         "output": "cosmos3_t2v_sound.mp4",
     },
@@ -62,9 +71,68 @@ TASK_DEFAULTS = {
         "num_frames": 17,
         "num_inference_steps": 30,
         "guidance_scale": 1.0,
+        "flow_shift": 5.0,
         "fps": 24,
         "output": "cosmos3_action_policy.mp4",
     },
+    "action_forward_dynamics": {
+        "height": 480,
+        "width": 640,
+        "num_frames": 17,
+        "num_inference_steps": 30,
+        "guidance_scale": 1.0,
+        "flow_shift": 5.0,
+        "fps": 5,
+        "output": "cosmos3_action_forward_dynamics.mp4",
+    },
+    "action_inverse_dynamics": {
+        "height": 480,
+        "width": 640,
+        "num_frames": 17,
+        "num_inference_steps": 30,
+        "guidance_scale": 1.0,
+        "flow_shift": 5.0,
+        "fps": 5,
+        "output": "cosmos3_action_inverse_dynamics.mp4",
+    },
+}
+
+_INPUTS_DIR = Path(__file__).resolve().parent / "inputs"
+_TASK_ACTION_MODES = {
+    "action_policy": "policy",
+    "action_forward_dynamics": "forward_dynamics",
+    "action_inverse_dynamics": "inverse_dynamics",
+}
+_ACTION_TASKS = set(_TASK_ACTION_MODES)
+_VIDEO_INPUT_TASKS = {"action_inverse_dynamics"}
+_IMAGE_INPUT_TASKS = {"i2v", "action_policy", "action_forward_dynamics"}
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+_CACHE_DIR = Path(
+    os.environ.get(
+        "COSMOS3_EXAMPLE_CACHE",
+        str(Path(tempfile.gettempdir()) / "cosmos3_examples"),
+    )
+)
+_JSON_TO_ATTR = {
+    "prompt": "prompt",
+    "negative_prompt": "negative_prompt",
+    "vision_path": "vision_path",
+    "action_path": "action_path",
+    "height": "height",
+    "width": "width",
+    "num_frames": "num_frames",
+    "num_inference_steps": "num_inference_steps",
+    "guidance_scale": "guidance_scale",
+    "flow_shift": "flow_shift",
+    "fps": "fps",
+    "seed": "seed",
+    "action_mode": "action_mode",
+    "action_chunk_size": "action_chunk_size",
+    "raw_action_dim": "raw_action_dim",
+    "domain_name": "domain_name",
+    "domain_id": "domain_id",
+    "generate_sound": "generate_sound",
+    "sound_duration": "sound_duration",
 }
 
 
@@ -83,17 +151,52 @@ def parse_args() -> argparse.Namespace:
         help="Cosmos3 example task to run.",
     )
     parser.add_argument(
+        "--input-json",
+        default=None,
+        help="Path to a JSON or JSONL input file (e.g. inputs/t2v.json). When given, every recognized "
+        "field overrides the matching default; explicit CLI flags still win. Use JSONL to batch multiple "
+        "generations in one invocation (e.g. inputs/action_forward_dynamics_camera.jsonl).",
+    )
+    parser.add_argument(
         "--prompt",
         default="A small warehouse robot moves a blue box across a clean floor.",
-        help="Text prompt.",
+        help="Text prompt. Overrides any prompt loaded from --input-json.",
     )
     parser.add_argument("--negative-prompt", default=DEFAULT_NEGATIVE_PROMPT, help="Negative prompt.")
-    parser.add_argument("--image", default=None, help="Input image for i2v or action_policy.")
+    parser.add_argument(
+        "--image",
+        default=None,
+        help="Input image path for i2v / image-input action tasks. Alias for --vision-path.",
+    )
+    parser.add_argument(
+        "--vision-path",
+        default=None,
+        help="Vision input as a local path or http(s) URL. Image file for i2v / policy; image or video file "
+        "for forward_dynamics; video file for inverse_dynamics. If a video is supplied for i2v / policy, "
+        "the first frame is extracted automatically (requires imageio).",
+    )
+    parser.add_argument(
+        "--action-path",
+        default=None,
+        help="Local path or URL to an action JSON for forward_dynamics tasks.",
+    )
+    parser.add_argument(
+        "--action-mode",
+        default=None,
+        choices=["forward_dynamics", "inverse_dynamics", "policy"],
+        help="Override action_mode. Defaults are derived from --task.",
+    )
+    parser.add_argument(
+        "--generate-sound",
+        action="store_true",
+        help="Enable sound generation.",
+    )
     parser.add_argument("--output", default=None, help="Output PNG or MP4 path. Default depends on --task.")
     parser.add_argument(
         "--action-output",
         default=None,
-        help="Action JSON path for action_policy. Defaults to the video output stem plus _action.json.",
+        help="Action JSON path for inverse_dynamics / action_policy outputs. "
+        "Defaults to the video output stem plus _action.json.",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--height", type=int, default=None, help="Output height. Default depends on --task.")
@@ -106,6 +209,12 @@ def parse_args() -> argparse.Namespace:
         help="Sampling steps. Default depends on --task.",
     )
     parser.add_argument("--guidance-scale", type=float, default=None, help="CFG scale. Default depends on --task.")
+    parser.add_argument(
+        "--flow-shift",
+        type=float,
+        default=None,
+        help="Flow-matching scheduler shift. Default depends on --task (cosmos3-internal: 3.0 t2i / 10.0 t2v/i2v / 5.0 action).",
+    )
     parser.add_argument("--fps", type=int, default=None, help="Output video fps. Default depends on --task.")
     parser.add_argument(
         "--sound-duration",
@@ -181,6 +290,114 @@ def _cache_config(cache_backend: str | None) -> dict[str, Any] | None:
         "scm_steps_mask_policy": None,
         "scm_steps_policy": "dynamic",
     }
+
+
+def _is_url(value: str) -> bool:
+    return urllib.parse.urlparse(value).scheme in {"http", "https"}
+
+
+def _is_video_path(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    target = parsed.path if parsed.scheme else value
+    return Path(target).suffix.lower() in _VIDEO_EXTENSIONS
+
+
+def _resolve_local_path(path_or_url: str) -> str:
+    if not _is_url(path_or_url):
+        return path_or_url
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = Path(urllib.parse.urlparse(path_or_url).path).suffix or ""
+    digest = hashlib.sha256(path_or_url.encode("utf-8")).hexdigest()[:16]
+    target = _CACHE_DIR / f"{digest}{suffix}"
+    if not target.exists():
+        print(f"Downloading {path_or_url} -> {target}")
+        with urllib.request.urlopen(path_or_url) as response, open(target, "wb") as fh:
+            fh.write(response.read())
+    return str(target)
+
+
+def _first_video_frame(video_path: str) -> PIL.Image.Image:
+    try:
+        import imageio.v3 as iio  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ImportError(
+            "Extracting the first frame of a video for an image-input task requires imageio. "
+            "Install with `pip install imageio[ffmpeg]` or pass a still image via --vision-path."
+        ) from exc
+    frame = np.asarray(iio.imread(video_path, index=0))
+    return PIL.Image.fromarray(frame).convert("RGB")
+
+
+def _load_video_frames_from(path_or_url: str, max_frames: int) -> list[PIL.Image.Image]:
+    if max_frames <= 0:
+        raise ValueError(f"max_frames must be positive, got {max_frames}.")
+
+    try:
+        import imageio.v3 as iio  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise ImportError(
+            "Loading video frames for Cosmos3 action forward-dynamics requires imageio. "
+            "Install with `pip install imageio[ffmpeg]` or pass a still image via --vision-path."
+        ) from exc
+
+    local = _resolve_local_path(path_or_url)
+    frames: list[PIL.Image.Image] = []
+    for frame in iio.imiter(local):
+        frames.append(PIL.Image.fromarray(np.asarray(frame)).convert("RGB"))
+        if len(frames) >= max_frames:
+            break
+    if not frames:
+        raise ValueError(f"Cosmos3 action video input contains no frames: {path_or_url}")
+    return frames
+
+
+def _load_image_from(path_or_url: str) -> PIL.Image.Image:
+    local = _resolve_local_path(path_or_url)
+    if _is_video_path(path_or_url):
+        return _first_video_frame(local)
+    return PIL.Image.open(local).convert("RGB")
+
+
+def _load_input_records(path: str) -> list[dict[str, Any]]:
+    src = Path(path)
+    if not src.exists():
+        candidate = _INPUTS_DIR / path
+        if candidate.exists():
+            src = candidate
+    if not src.exists():
+        raise FileNotFoundError(f"Input JSON file not found: {path}")
+    text = src.read_text(encoding="utf-8").strip()
+    if src.suffix == ".jsonl":
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    return [json.loads(text)]
+
+
+def _cli_provided_attrs(argv: list[str]) -> set[str]:
+    provided: set[str] = set()
+    for token in argv:
+        if not token.startswith("--"):
+            continue
+        flag = token.split("=", 1)[0][2:]
+        provided.add(flag.replace("-", "_"))
+    return provided
+
+
+def _apply_record(record: dict[str, Any], args: argparse.Namespace, cli_set: set[str]) -> None:
+    # --image and --vision-path are aliases for the same visual input. A CLI
+    # value for either should suppress a JSON override of the other.
+    effective_cli_set = set(cli_set)
+    if "image" in effective_cli_set or "vision_path" in effective_cli_set:
+        effective_cli_set |= {"image", "vision_path"}
+    for key, value in record.items():
+        attr = _JSON_TO_ATTR.get(key)
+        if attr is None:
+            print(f"Ignoring unknown input-json field: {key}")
+            continue
+        if attr in effective_cli_set:
+            continue
+        if attr == "generate_sound" and not bool(value):
+            continue
+        setattr(args, attr, value)
 
 
 def _first_output(outputs: Any) -> Any:
@@ -410,53 +627,95 @@ def _build_omni(args: argparse.Namespace) -> Omni:
     return Omni(**kwargs)
 
 
-def main() -> None:
-    args = parse_args()
+def _resolve_action_mode(task: str, args: argparse.Namespace) -> str | None:
+    if getattr(args, "action_mode", None):
+        return args.action_mode
+    return _TASK_ACTION_MODES.get(task)
 
-    defaults = TASK_DEFAULTS[args.task]
+
+def _build_prompt_and_extra(
+    args: argparse.Namespace,
+    task: str,
+    action_mode: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    vision_path = args.vision_path or args.image
+
+    prompt: dict[str, Any] = {
+        "prompt": args.prompt,
+        "negative_prompt": args.negative_prompt,
+        "modalities": ["image"] if task == "t2i" else ["video"],
+    }
+
+    if task in _VIDEO_INPUT_TASKS:
+        if not vision_path:
+            raise ValueError(f"--vision-path (video) is required for {task}.")
+        local_video = _resolve_local_path(vision_path)
+        prompt["multi_modal_data"] = {"video": local_video}
+    elif task == "action_forward_dynamics" and vision_path and _is_video_path(vision_path):
+        prompt["multi_modal_data"] = {"video": _load_video_frames_from(vision_path, args.action_chunk_size + 1)}
+    elif task in _IMAGE_INPUT_TASKS:
+        if not vision_path:
+            raise ValueError(f"--vision-path (image) is required for {task}.")
+        prompt["multi_modal_data"] = {"image": _load_image_from(vision_path)}
+    elif vision_path:
+        prompt["multi_modal_data"] = {"image": _load_image_from(vision_path)}
+
+    extra_args: dict[str, Any] = {}
+
+    if getattr(args, "flow_shift", None) is not None:
+        extra_args["flow_shift"] = float(args.flow_shift)
+
+    sound_enabled = bool(getattr(args, "generate_sound", False)) or task == "t2v_sound"
+    if sound_enabled and action_mode is not None:
+        raise ValueError("Cosmos3 does not support action modes combined with sound generation.")
+    if sound_enabled:
+        prompt["generate_sound"] = True
+        extra_args["generate_sound"] = True
+        if args.sound_duration is not None:
+            extra_args["sound_duration"] = args.sound_duration
+
+    if action_mode is not None:
+        extra_args["action_mode"] = action_mode
+        extra_args["action_chunk_size"] = args.action_chunk_size
+        if action_mode in {"policy", "inverse_dynamics"}:
+            extra_args["raw_action_dim"] = args.raw_action_dim
+        elif args.raw_action_dim is not None:
+            extra_args["raw_action_dim"] = args.raw_action_dim
+        if args.domain_id is not None:
+            extra_args["domain_id"] = args.domain_id
+        else:
+            extra_args["domain_name"] = args.domain_name
+        if action_mode == "forward_dynamics":
+            if not args.action_path:
+                raise ValueError("--action-path is required for forward_dynamics.")
+            extra_args["action_path"] = _resolve_local_path(args.action_path)
+        elif args.action_path:
+            extra_args["action_path"] = _resolve_local_path(args.action_path)
+
+    return prompt, extra_args
+
+
+def _run_one(
+    omni: Omni,
+    args: argparse.Namespace,
+    task: str,
+    output_path: Path,
+    record_index: int | None = None,
+) -> None:
+    defaults = TASK_DEFAULTS[task]
     height = args.height or defaults["height"]
     width = args.width or defaults["width"]
     num_frames = args.num_frames if args.num_frames is not None else defaults["num_frames"]
     num_inference_steps = args.num_inference_steps or defaults["num_inference_steps"]
     guidance_scale = args.guidance_scale if args.guidance_scale is not None else defaults["guidance_scale"]
     fps = args.fps or defaults["fps"]
-    output_path = Path(args.output or defaults["output"])
+    if args.flow_shift is None and defaults.get("flow_shift") is not None:
+        args.flow_shift = defaults["flow_shift"]
 
-    if args.task in {"i2v", "action_policy"} and args.image is None:
-        raise ValueError(f"--image is required for {args.task}.")
+    action_mode = _resolve_action_mode(task, args)
+    prompt, extra_args = _build_prompt_and_extra(args, task, action_mode)
 
-    image = PIL.Image.open(args.image).convert("RGB") if args.image else None
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
-    omni = _build_omni(args)
-
-    prompt: dict[str, Any] = {
-        "prompt": args.prompt,
-        "negative_prompt": args.negative_prompt,
-        "modalities": ["image"] if args.task == "t2i" else ["video"],
-    }
-    if image is not None:
-        prompt["multi_modal_data"] = {"image": image}
-    if args.task == "t2v_sound":
-        prompt["generate_sound"] = True
-
-    extra_args: dict[str, Any] = {}
-    if args.task == "t2v_sound":
-        extra_args["generate_sound"] = True
-        if args.sound_duration is not None:
-            extra_args["sound_duration"] = args.sound_duration
-    if args.task == "action_policy":
-        extra_args.update(
-            {
-                "action_mode": "policy",
-                "action_chunk_size": args.action_chunk_size,
-                "raw_action_dim": args.raw_action_dim,
-            }
-        )
-        if args.domain_id is not None:
-            extra_args["domain_id"] = args.domain_id
-        else:
-            extra_args["domain_name"] = args.domain_name
-
     sampling = OmniDiffusionSamplingParams(
         height=height,
         width=width,
@@ -469,20 +728,26 @@ def main() -> None:
     )
 
     print("Cosmos3 generation configuration:")
-    print(f"  Task: {args.task}")
+    print(f"  Task: {task}")
+    if action_mode:
+        print(f"  Action mode: {action_mode}")
+    if record_index is not None:
+        print(f"  Record: {record_index}")
     print(f"  Model: {args.model}")
     print(f"  Size: {width}x{height}")
     if num_frames is not None:
         print(f"  Frames: {num_frames}")
     print(f"  Steps: {num_inference_steps}")
     print(f"  Guidance scale: {guidance_scale}")
+    if args.flow_shift is not None:
+        print(f"  Flow shift: {args.flow_shift}")
 
     start = time.perf_counter()
     outputs = omni.generate(prompt, sampling)
     elapsed = time.perf_counter() - start
     print(f"Total generation time: {elapsed:.4f} seconds")
 
-    if args.task == "t2i":
+    if task == "t2i":
         images = _extract_images(outputs)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         images[0].save(output_path)
@@ -495,13 +760,47 @@ def main() -> None:
     )
     print(f"Saved video to {output_path}")
 
-    if args.task == "action_policy":
-        action_path = (
+    if action_mode in {"policy", "inverse_dynamics"} and action:
+        action_out = (
             Path(args.action_output) if args.action_output else output_path.with_name(f"{output_path.stem}_action.json")
         )
-        action_path.parent.mkdir(parents=True, exist_ok=True)
-        action_path.write_text(json.dumps(_jsonable(action), indent=2) + "\n", encoding="utf-8")
-        print(f"Saved action metadata to {action_path}")
+        action_out.parent.mkdir(parents=True, exist_ok=True)
+        action_out.write_text(json.dumps(_jsonable(action), indent=2) + "\n", encoding="utf-8")
+        print(f"Saved action metadata to {action_out}")
+
+
+def _record_output_path(base: Path, index: int, total: int) -> Path:
+    if total <= 1:
+        return base
+    return base.with_name(f"{base.stem}_{index}{base.suffix}")
+
+
+def main() -> None:
+    args = parse_args()
+    cli_set = _cli_provided_attrs(sys.argv[1:])
+
+    records: list[dict[str, Any]] = [{}]
+    if args.input_json:
+        records = _load_input_records(args.input_json)
+        if not records:
+            raise ValueError(f"--input-json {args.input_json} contained no records.")
+
+    omni = _build_omni(args)
+
+    base_output = Path(args.output or TASK_DEFAULTS[args.task]["output"])
+
+    for index, record in enumerate(records):
+        record_args = argparse.Namespace(**vars(args))
+        if record:
+            _apply_record(record, record_args, cli_set)
+        output_path = _record_output_path(base_output, index, len(records))
+        _run_one(
+            omni,
+            record_args,
+            args.task,
+            output_path,
+            record_index=index if len(records) > 1 else None,
+        )
 
 
 if __name__ == "__main__":

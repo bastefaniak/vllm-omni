@@ -3,7 +3,7 @@
 """Cosmos3 guardrail hooks for vllm-omni.
 
 Text: Blocklist (keyword matching) + Qwen3Guard (0.6B LLM classifier)
-Video: SigLIP-based content safety filter + RetinaFace face blur
+Video: RetinaFace face blur
 
 Enable via custom_pipeline_args or the test script:
     python test_cosmos3.py --model ... --guardrails
@@ -19,7 +19,6 @@ from typing import Any
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import GuardrailViolationError
@@ -36,7 +35,6 @@ _initialized = False
 
 GUARDRAIL_HF_REPO = "nvidia/Cosmos-Guardrail1"
 GUARDRAIL_HF_REVISION = "d6d4bfa899a71454a700907664f3e88f503950cf"
-CUTOFF_UNSAFE_FRAMES_PERCENT = 10
 
 
 def set_text_guardrail(fn: TextGuardrailFn) -> None:
@@ -47,38 +45,6 @@ def set_text_guardrail(fn: TextGuardrailFn) -> None:
 def set_video_guardrail(fn: VideoGuardrailFn) -> None:
     global _video_guardrail
     _video_guardrail = fn
-
-
-# ---------------------------------------------------------------------------
-# Video safety classifier (matches reference: SigLIP so400m + 3-layer head)
-# ---------------------------------------------------------------------------
-class SafetyClassifier(nn.Module):
-    """3-layer classifier with BatchNorm (1152 → 512 → 256 → 7)."""
-
-    def __init__(self, input_size: int = 1152, num_classes: int = 7):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Linear(input_size, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Linear(256, num_classes),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
-
-
-CLASS_IDX_TO_NAME = {
-    0: "Safe",
-    1: "Sexual_Content",
-    3: "Drugs",
-    4: "Child_Abuse",
-    5: "Hate_and_Harassment",
-    6: "Self-Harm",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -155,44 +121,6 @@ def _generate_qwen_guardrail_response(prompt: str, tokenizer: Any, model: Any, d
     return tokenizer.decode(
         output_ids[0][input_length:],
         skip_special_tokens=True,
-    )
-
-
-def _extract_siglip_image_features(features: object) -> torch.Tensor:
-    def _validate_features(tensor: torch.Tensor) -> torch.Tensor:
-        if tensor.dim() != 2:
-            raise TypeError(
-                "SigLIP image feature extractor returned features with shape "
-                f"{tuple(tensor.shape)}; expected pooled features with shape [batch, hidden]."
-            )
-        return tensor
-
-    if isinstance(features, torch.Tensor):
-        return _validate_features(features)
-
-    pooler_output = getattr(features, "pooler_output", None)
-    if isinstance(pooler_output, torch.Tensor):
-        return _validate_features(pooler_output)
-
-    image_embeds = getattr(features, "image_embeds", None)
-    if isinstance(image_embeds, torch.Tensor):
-        return _validate_features(image_embeds)
-
-    if isinstance(features, Mapping):
-        for key in ("pooler_output", "image_embeds"):
-            value = features.get(key)
-            if isinstance(value, torch.Tensor):
-                return _validate_features(value)
-
-    if isinstance(features, list | tuple):
-        if len(features) > 1 and isinstance(features[1], torch.Tensor):
-            return _validate_features(features[1])
-        if features and isinstance(features[0], torch.Tensor):
-            return _validate_features(features[0])
-
-    raise TypeError(
-        "SigLIP image feature extractor returned unsupported output type "
-        f"{type(features).__name__}; expected a tensor or output with pooled image features."
     )
 
 
@@ -273,7 +201,6 @@ def _build_text_guardrail(offload_to_cpu: bool) -> TextGuardrailFn:
 
 def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
     ckpt_dir = _download_checkpoint()
-    safety_checker: Callable[[np.ndarray], tuple[bool, str]] | None = None
     face_blurrer: Callable[[np.ndarray], np.ndarray] | None = None
 
     # `offload_to_cpu` controls idle weight placement only; the forward pass
@@ -281,62 +208,7 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
     compute_device = "cuda"
     idle_device = "cpu" if offload_to_cpu else compute_device
 
-    # 1. Video content safety filter: SigLIP so400m + SafetyClassifier
-    try:
-        from PIL import Image
-        from transformers import SiglipModel, SiglipProcessor
-
-        siglip_id = "google/siglip-so400m-patch14-384"
-        siglip_model = SiglipModel.from_pretrained(siglip_id).to(idle_device, dtype=torch.float32).eval()
-        siglip_processor = SiglipProcessor.from_pretrained(siglip_id)
-
-        classifier = SafetyClassifier(input_size=1152, num_classes=7)
-        ckpt_path = os.path.join(ckpt_dir, "video_content_safety_filter", "safety_filter.pt")
-        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-        # Checkpoint keys have "network." prefix from the VideoSafetyModel wrapper.
-        state = {k.removeprefix("network."): v for k, v in checkpoint["model"].items()}
-        classifier.load_state_dict(state)
-        classifier = classifier.to(idle_device, dtype=torch.float32).eval()
-
-        def _safety_check(frames: np.ndarray) -> tuple[bool, str]:
-            nonlocal siglip_model, classifier
-            total = len(frames)
-            if total == 0:
-                return True, ""
-            if offload_to_cpu:
-                siglip_model = siglip_model.to(compute_device)
-                classifier = classifier.to(compute_device)
-
-            unsafe_count = 0
-            try:
-                for frame in frames:
-                    img = Image.fromarray(frame)
-                    inputs = siglip_processor(images=img, return_tensors="pt").to(compute_device, dtype=torch.float32)
-                    with torch.no_grad():
-                        features = siglip_model.get_image_features(**inputs)
-                        features = _extract_siglip_image_features(features)
-                        features = torch.nn.functional.normalize(features, p=2, dim=-1)
-                        logits = classifier(features)
-                        pred = logits.argmax(dim=-1).item()
-                    class_name = CLASS_IDX_TO_NAME.get(pred, "Unknown")
-                    if class_name != "Safe":
-                        unsafe_count += 1
-            finally:
-                if offload_to_cpu:
-                    siglip_model = siglip_model.to("cpu")
-                    classifier = classifier.to("cpu")
-
-            if unsafe_count / total > CUTOFF_UNSAFE_FRAMES_PERCENT / 100:
-                return False, f"Video content safety: {unsafe_count}/{total} frames unsafe"
-            return True, ""
-
-        safety_checker = _safety_check
-        if _is_rank_zero():
-            logger.info("Video content safety filter loaded (SigLIP so400m + classifier)")
-    except (ImportError, FileNotFoundError) as e:
-        logger.warning("Could not load video safety filter: %s", e)
-
-    # 2. Face blur: RetinaFace + pixelation
+    # Face blur: RetinaFace + pixelation
     try:
         from retinaface.data import cfg_re50
         from retinaface.layers.functions.prior_box import PriorBox
@@ -452,10 +324,6 @@ def _build_video_guardrail(offload_to_cpu: bool) -> VideoGuardrailFn:
         logger.warning("Could not load face blur filter: %s", e)
 
     def video_guardrail(frames: np.ndarray) -> np.ndarray:
-        if safety_checker is not None:
-            is_safe, msg = safety_checker(frames)
-            if not is_safe:
-                raise GuardrailViolationError(f"Guardrail blocked video: {msg}")
         if face_blurrer is not None:
             frames = face_blurrer(frames)
         return frames

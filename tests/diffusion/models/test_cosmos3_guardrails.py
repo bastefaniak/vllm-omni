@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.tokenization_utils_base import BatchEncoding
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
@@ -73,39 +72,3 @@ def test_qwen_guardrail_generation_accepts_tensor_input_ids() -> None:
     assert len(args) == 1
     assert torch.equal(args[0], input_ids)
     assert kwargs == {"max_new_tokens": 128}
-
-
-def test_siglip_feature_extraction_accepts_tensor() -> None:
-    from vllm_omni.diffusion.models.cosmos3.guardrails import _extract_siglip_image_features
-
-    features = torch.randn(1, 1152)
-
-    assert _extract_siglip_image_features(features) is features
-
-
-def test_siglip_feature_extraction_accepts_base_model_output_with_pooling() -> None:
-    from vllm_omni.diffusion.models.cosmos3.guardrails import _extract_siglip_image_features
-
-    last_hidden_state = torch.randn(1, 729, 1152)
-    pooler_output = torch.randn(1, 1152)
-    output = BaseModelOutputWithPooling(last_hidden_state=last_hidden_state, pooler_output=pooler_output)
-
-    assert _extract_siglip_image_features(output) is pooler_output
-
-
-def test_siglip_feature_extraction_accepts_tuple_output() -> None:
-    from vllm_omni.diffusion.models.cosmos3.guardrails import _extract_siglip_image_features
-
-    last_hidden_state = torch.randn(1, 729, 1152)
-    pooler_output = torch.randn(1, 1152)
-
-    assert _extract_siglip_image_features((last_hidden_state, pooler_output)) is pooler_output
-
-
-def test_siglip_feature_extraction_rejects_unpooled_features() -> None:
-    from vllm_omni.diffusion.models.cosmos3.guardrails import _extract_siglip_image_features
-
-    last_hidden_state = torch.randn(1, 729, 1152)
-
-    with pytest.raises(TypeError, match="pooled features"):
-        _extract_siglip_image_features(last_hidden_state)

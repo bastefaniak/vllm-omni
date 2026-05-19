@@ -1,22 +1,21 @@
 #!/bin/bash
-# Cosmos3 action policy example (bridge_orig_lerobot, image input).
+# Cosmos3 action policy example (autonomous vehicle domain, image input).
 #
-# Cosmos3 policy mode consumes an image plus a language instruction and
-# generates a video together with the predicted action sequence. The example
-# image is the first frame of bridge_0.mp4 (cosmos-dependencies), extracted
-# locally with ffmpeg so the request matches the prompt scene.
+# The example image is the first frame of the AV vision clip
+# (cosmos-dependencies), extracted locally with ffmpeg so the request matches
+# the prompt scene.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUTS_DIR="${INPUTS_DIR:-${SCRIPT_DIR}/../../offline_inference/cosmos3/inputs}"
-INPUT_JSON="${INPUT_JSON:-${INPUTS_DIR}/action_policy_robot.json}"
+INPUT_JSON="${INPUT_JSON:-${INPUTS_DIR}/action_policy_av.json}"
 
 BASE_URL="${BASE_URL:-http://localhost:8091}"
-OUTPUT_PATH="${OUTPUT_PATH:-cosmos3_action_policy.mp4}"
-ACTION_OUTPUT_PATH="${ACTION_OUTPUT_PATH:-cosmos3_action_policy_action.json}"
-IMAGE_PATH="${IMAGE_PATH:-bridge_0_frame0.jpg}"
-VIDEO_PATH="${VIDEO_PATH:-bridge_0.mp4}"
+OUTPUT_PATH="${OUTPUT_PATH:-cosmos3_action_policy_av.mp4}"
+ACTION_OUTPUT_PATH="${ACTION_OUTPUT_PATH:-cosmos3_action_policy_av_action.json}"
+IMAGE_PATH="${IMAGE_PATH:-av_vision_25_frame0.jpg}"
+VIDEO_PATH="${VIDEO_PATH:-av_vision_25.mp4}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 
 if [ ! -f "${INPUT_JSON}" ]; then
@@ -30,7 +29,7 @@ DOMAIN_NAME="$(jq -r '.domain_name' "${INPUT_JSON}")"
 RAW_ACTION_DIM="$(jq -r '.raw_action_dim' "${INPUT_JSON}")"
 ACTION_CHUNK_SIZE="$(jq -r '.action_chunk_size' "${INPUT_JSON}")"
 NUM_FRAMES="$(jq -r '.num_frames // 17' "${INPUT_JSON}")"
-FPS="$(jq -r '.fps // 5' "${INPUT_JSON}")"
+FPS="$(jq -r '.fps // 10' "${INPUT_JSON}")"
 HEIGHT="$(jq -r '.height // 480' "${INPUT_JSON}")"
 WIDTH="$(jq -r '.width // 640' "${INPUT_JSON}")"
 NUM_INFERENCE_STEPS="$(jq -r '.num_inference_steps // 30' "${INPUT_JSON}")"

@@ -1,22 +1,24 @@
 #!/bin/bash
-# Cosmos3 action policy example (bridge_orig_lerobot, image input).
+# Cosmos3 inverse-dynamics example (autonomous vehicle, video input).
 #
-# Cosmos3 policy mode consumes an image plus a language instruction and
-# generates a video together with the predicted action sequence. The example
-# image is the first frame of bridge_0.mp4 (cosmos-dependencies), extracted
-# locally with ffmpeg so the request matches the prompt scene.
+# KNOWN LIMITATION: as of writing, the online `/v1/videos` endpoint accepts
+# image bytes only via the `input_reference` form field. Inverse-dynamics
+# needs the full source video, so this script will currently fail at upload
+# time. The offline path (`examples/offline_inference/cosmos3/end2end.py
+# --task action_inverse_dynamics --input-json inputs/action_inverse_dynamics_av.json`)
+# does support video input today. The script below is kept ready so it
+# starts working when the server gains video upload support.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INPUTS_DIR="${INPUTS_DIR:-${SCRIPT_DIR}/../../offline_inference/cosmos3/inputs}"
-INPUT_JSON="${INPUT_JSON:-${INPUTS_DIR}/action_policy_robot.json}"
+INPUT_JSON="${INPUT_JSON:-${INPUTS_DIR}/action_inverse_dynamics_av.json}"
 
 BASE_URL="${BASE_URL:-http://localhost:8091}"
-OUTPUT_PATH="${OUTPUT_PATH:-cosmos3_action_policy.mp4}"
-ACTION_OUTPUT_PATH="${ACTION_OUTPUT_PATH:-cosmos3_action_policy_action.json}"
-IMAGE_PATH="${IMAGE_PATH:-bridge_0_frame0.jpg}"
-VIDEO_PATH="${VIDEO_PATH:-bridge_0.mp4}"
+OUTPUT_PATH="${OUTPUT_PATH:-cosmos3_inverse_dynamics_av.mp4}"
+ACTION_OUTPUT_PATH="${ACTION_OUTPUT_PATH:-cosmos3_inverse_dynamics_av_action.json}"
+VIDEO_PATH="${VIDEO_PATH:-av_vision_25.mp4}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 
 if [ ! -f "${INPUT_JSON}" ]; then
@@ -30,7 +32,7 @@ DOMAIN_NAME="$(jq -r '.domain_name' "${INPUT_JSON}")"
 RAW_ACTION_DIM="$(jq -r '.raw_action_dim' "${INPUT_JSON}")"
 ACTION_CHUNK_SIZE="$(jq -r '.action_chunk_size' "${INPUT_JSON}")"
 NUM_FRAMES="$(jq -r '.num_frames // 17' "${INPUT_JSON}")"
-FPS="$(jq -r '.fps // 5' "${INPUT_JSON}")"
+FPS="$(jq -r '.fps // 10' "${INPUT_JSON}")"
 HEIGHT="$(jq -r '.height // 480' "${INPUT_JSON}")"
 WIDTH="$(jq -r '.width // 640' "${INPUT_JSON}")"
 NUM_INFERENCE_STEPS="$(jq -r '.num_inference_steps // 30' "${INPUT_JSON}")"
@@ -38,26 +40,22 @@ GUIDANCE_SCALE="$(jq -r '.guidance_scale // 1.0' "${INPUT_JSON}")"
 FLOW_SHIFT="$(jq -r '.flow_shift // 5.0' "${INPUT_JSON}")"
 SEED="$(jq -r '.seed // 0' "${INPUT_JSON}")"
 
-if [ ! -f "${IMAGE_PATH}" ]; then
-  if [ ! -f "${VIDEO_PATH}" ]; then
-    echo "Downloading ${VISION_URL} -> ${VIDEO_PATH}"
-    curl -sSL "${VISION_URL}" -o "${VIDEO_PATH}"
-  fi
-  echo "Extracting first frame -> ${IMAGE_PATH}"
-  ffmpeg -y -loglevel error -i "${VIDEO_PATH}" -vf "select=eq(n\,0)" -vframes 1 "${IMAGE_PATH}"
+if [ ! -f "${VIDEO_PATH}" ]; then
+  echo "Downloading ${VISION_URL} -> ${VIDEO_PATH}"
+  curl -sSL "${VISION_URL}" -o "${VIDEO_PATH}"
 fi
 
 EXTRA_PARAMS="$(jq -nc \
   --arg domain "${DOMAIN_NAME}" \
   --argjson dim "${RAW_ACTION_DIM}" \
   --argjson chunk "${ACTION_CHUNK_SIZE}" \
-  '{action_mode:"policy", domain_name:$domain, raw_action_dim:$dim, action_chunk_size:$chunk}')"
+  '{action_mode:"inverse_dynamics", domain_name:$domain, raw_action_dim:$dim, action_chunk_size:$chunk}')"
 
 create_response=$(
   curl -sS -X POST "${BASE_URL}/v1/videos" \
     -H "Accept: application/json" \
     -F "prompt=${PROMPT}" \
-    -F "input_reference=@${IMAGE_PATH}" \
+    -F "input_reference=@${VIDEO_PATH}" \
     -F "size=${WIDTH}x${HEIGHT}" \
     -F "num_frames=${NUM_FRAMES}" \
     -F "fps=${FPS}" \

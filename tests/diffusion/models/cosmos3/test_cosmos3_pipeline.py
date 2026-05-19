@@ -111,6 +111,34 @@ class TestPreAndPostProcess:
 
         assert tuple(result.prompts[0]["additional_information"]["preprocessed_image"].shape[-2:]) == (64, 96)
 
+    def test_preprocess_action_video_stores_image_and_video_tensors(self) -> None:
+        from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import get_cosmos3_pre_process_func
+
+        frames = [
+            Image.new("RGB", (8, 4), "red"),
+            Image.new("RGB", (8, 4), "green"),
+            Image.new("RGB", (8, 4), "blue"),
+        ]
+        request = SimpleNamespace(
+            prompts=[
+                {
+                    "prompt": "Move the robot.",
+                    "multi_modal_data": {"video": frames},
+                }
+            ],
+            sampling_params=SimpleNamespace(
+                height=16,
+                width=32,
+                extra_args={"action_mode": "forward_dynamics"},
+            ),
+        )
+
+        result = get_cosmos3_pre_process_func(SimpleNamespace())(request)
+        additional = result.prompts[0]["additional_information"]
+
+        assert tuple(additional["preprocessed_image"].shape) == (1, 3, 16, 32)
+        assert tuple(additional["preprocessed_video"].shape) == (1, 3, 3, 16, 32)
+
     def test_postprocess_latent_passthrough_and_t2i_shape_validation(self) -> None:
         from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import get_cosmos3_post_process_func
 
@@ -949,6 +977,65 @@ class TestForwardRouting:
 
         assert captured["format"]["num_frames"] == 17
         assert captured["diffuse_calls"][0]["action_latents"].shape == (1, 16, 4)
+
+    def test_forward_forward_dynamics_uses_action_video_conditioning(self, make_cosmos3_pipeline) -> None:
+        pipeline = make_cosmos3_pipeline()
+        pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, action_gen=True, action_dim=4)
+        captured = self._install_forward_stubs(pipeline)
+        video_tensor = torch.zeros(1, 3, 3, 16, 16)
+        condition_latents = torch.full((1, 2, 1, 2, 2), 6.0)
+
+        def fake_prepare_action_latents(**kwargs):
+            captured["prepare_action_latents"] = kwargs
+            action_latents = torch.zeros(1, 2, 4)
+            action_velocity_mask = torch.zeros(1, 2, 1)
+            clean_action = torch.zeros(1, 2, 4)
+            return action_latents, action_velocity_mask, clean_action, 2
+
+        def fake_prepare_action_video(video, mode, height, width, num_frames, generator):
+            captured["prepare_action_video"] = (video, mode, height, width, num_frames, generator.initial_seed())
+            latents = torch.zeros(1, 2, 1, 2, 2)
+            velocity_mask = torch.ones(1, 1, 1, 1, 1)
+            return latents, velocity_mask, condition_latents
+
+        def fail_prepare_i2v(*args, **kwargs):
+            raise AssertionError("forward_dynamics video input must not route through the i2v image path")
+
+        pipeline._prepare_action_latents = fake_prepare_action_latents  # type: ignore[method-assign]
+        pipeline._prepare_latents_action_video = fake_prepare_action_video  # type: ignore[method-assign]
+        pipeline._prepare_latents_i2v = fail_prepare_i2v  # type: ignore[method-assign]
+        req = SimpleNamespace(
+            prompts=[
+                {
+                    "prompt": "Move the robot.",
+                    "modalities": ["video"],
+                    "additional_information": {
+                        "preprocessed_image": torch.zeros(1, 3, 16, 16),
+                        "preprocessed_video": video_tensor,
+                    },
+                }
+            ],
+            sampling_params=make_sampling_params(
+                height=16,
+                width=16,
+                num_frames=3,
+                extra_args={
+                    "action_mode": "forward_dynamics",
+                    "action_chunk_size": 2,
+                    "domain_id": 0,
+                },
+            ),
+        )
+
+        pipeline.forward(req)
+
+        prepared_video, mode, height, width, num_frames, seed = captured["prepare_action_video"]
+        assert prepared_video is video_tensor
+        assert (mode, height, width, num_frames, seed) == ("forward_dynamics", 16, 16, 3, 123)
+        assert captured["prepare_action_latents"]["mode"] == "forward_dynamics"
+        diffuse_call = captured["diffuse_calls"][0]
+        assert diffuse_call["condition_latents"] is condition_latents
+        torch.testing.assert_close(diffuse_call["image_latent"], condition_latents[:, :, 0:1])
 
     def test_forward_video_sound_decodes_and_returns_audio_payload(self, make_cosmos3_pipeline) -> None:
         pipeline = make_cosmos3_pipeline()

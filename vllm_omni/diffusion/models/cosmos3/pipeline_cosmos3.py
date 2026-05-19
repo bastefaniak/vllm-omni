@@ -1651,7 +1651,6 @@ class Cosmos3OmniDiffusersPipeline(
         flow_shift_target = float(self._get_sp_param(sp, "flow_shift", default_flow_shift))
         guidance_interval = self._get_sp_param(sp, "guidance_interval", default_guidance_interval)
 
-        seed = sp.seed if sp.seed is not None else 42
         frame_rate = self._get_sp_param(sp, "resolved_frame_rate") or self._get_sp_param(sp, "frame_rate") or 24.0
         max_sequence_length = self._get_sp_param(sp, "max_sequence_length", 512) or 512
         use_system_prompt = bool(self._get_sp_param(sp, "use_system_prompt", False))
@@ -1681,7 +1680,10 @@ class Cosmos3OmniDiffusersPipeline(
         # transitions restore the right schedule (no T2I to T2V leak).
         self._set_flow_shift(flow_shift_target)
 
-        generator = torch.Generator(device=self.device).manual_seed(seed)
+        generator = sp.generator
+        if generator is None:
+            seed = sp.seed if sp.seed is not None else 42
+            generator = torch.Generator(device=self.device).manual_seed(seed)
 
         # --- Format prompts & tokenize (B=1; reused across loop iterations
         # for T2I num_outputs_per_prompt > 1) ---

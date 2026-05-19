@@ -164,7 +164,7 @@ def test_cosmos3_hsdp_conditions_match_und_and_gen_blocks() -> None:
 def test_cosmos3_transformer_exposes_layerwise_offload_and_repeated_blocks() -> None:
     from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import Cosmos3VFMTransformer
 
-    assert Cosmos3VFMTransformer._layerwise_offload_blocks_attr == "gen_layers"
+    assert Cosmos3VFMTransformer._layerwise_offload_blocks_attrs == ["gen_layers"]
     assert Cosmos3VFMTransformer._repeated_blocks == ["Cosmos3GenDecoderLayer"]
 
 
