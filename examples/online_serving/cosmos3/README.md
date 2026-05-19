@@ -17,6 +17,7 @@ bash run_server.sh
 - `ENABLE_LAYERWISE_OFFLOAD`: set to `1` to enable layerwise offload
 - `CFG_PARALLEL_SIZE`, `TENSOR_PARALLEL_SIZE`, `ULYSSES_DEGREE`, `USE_HSDP`: parallel execution controls
 - `ALLOWED_LOCAL_MEDIA_PATH`: local media access path, defaults to `/`
+- `DEPLOY_CONFIG`: optional deploy YAML override; defaults to the bundled Cosmos3 deploy config
 
 ## Disabling guardrails
 
@@ -24,13 +25,19 @@ Cosmos3 ships with safety guardrails that check prompts and apply generated-outp
 
 ### Server-wide (skip loading guardrail models entirely)
 
-Start the server with `--stage-configs-path cosmos3_no_guardrails.yaml`, which sets `model_config.guardrails: false` on the diffusion stage so the guardrail models are never loaded:
+Start the server with `--deploy-config cosmos3_no_guardrails.yaml`, which sets `model_config.guardrails: false` on the diffusion stage so the guardrail models are never loaded:
 
 ```bash
 vllm serve nvidia/Cosmos3-Nano --omni \
-  --model-class-name Cosmos3OmniDiffusersPipeline \
-  --stage-configs-path examples/online_serving/cosmos3/cosmos3_no_guardrails.yaml \
+  --deploy-config examples/online_serving/cosmos3/cosmos3_no_guardrails.yaml \
   --port 8091
+```
+
+The same override can be used with the helper script:
+
+```bash
+cd examples/online_serving/cosmos3
+DEPLOY_CONFIG=cosmos3_no_guardrails.yaml bash run_server.sh
 ```
 
 Other CLI flags (parallelism, cache backend, layerwise offload, etc.) are still honored; the YAML only overrides the guardrail toggle. When this path is used, per-request overrides cannot turn guardrails back on — the underlying models are not in memory.

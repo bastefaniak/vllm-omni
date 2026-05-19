@@ -12,16 +12,20 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 ULYSSES_DEGREE="${ULYSSES_DEGREE:-1}"
 USE_HSDP="${USE_HSDP:-0}"
 ALLOWED_LOCAL_MEDIA_PATH="${ALLOWED_LOCAL_MEDIA_PATH:-/}"
+DEPLOY_CONFIG="${DEPLOY_CONFIG:-}"
 
 args=(
   vllm serve "${MODEL}"
   --omni
   --port "${PORT}"
-  --model-class-name Cosmos3OmniDiffusersPipeline
   --allowed-local-media-path "${ALLOWED_LOCAL_MEDIA_PATH}"
   --cfg-parallel-size "${CFG_PARALLEL_SIZE}"
   --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"
 )
+
+if [ -n "${DEPLOY_CONFIG}" ]; then
+  args+=(--deploy-config "${DEPLOY_CONFIG}")
+fi
 
 if [ "${ULYSSES_DEGREE}" != "1" ]; then
   args+=(--usp "${ULYSSES_DEGREE}")

@@ -20,6 +20,24 @@ bash run_server.sh
 - `ENABLE_LAYERWISE_OFFLOAD`: set to `1` to enable layerwise offload
 - `CFG_PARALLEL_SIZE`, `TENSOR_PARALLEL_SIZE`, `ULYSSES_DEGREE`, `USE_HSDP`: parallel execution controls
 - `ALLOWED_LOCAL_MEDIA_PATH`: local media access path, defaults to `/`
+- `DEPLOY_CONFIG`: optional deploy YAML override; defaults to the bundled Cosmos3 deploy config
+
+## Disabling Guardrails
+
+Cosmos3 ships with prompt and generated-output guardrails. To skip loading guardrail models for the whole server, start with the no-guardrails deploy override:
+
+```bash
+vllm serve nvidia/Cosmos3-Nano --omni \
+  --deploy-config examples/online_serving/cosmos3/cosmos3_no_guardrails.yaml \
+  --port 8091
+```
+
+The helper script accepts the same override through `DEPLOY_CONFIG`:
+
+```bash
+cd examples/online_serving/cosmos3
+DEPLOY_CONFIG=cosmos3_no_guardrails.yaml bash run_server.sh
+```
 
 ## Text-to-Image
 
