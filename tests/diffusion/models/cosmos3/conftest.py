@@ -180,6 +180,7 @@ def make_sampling_params(**overrides: Any) -> SimpleNamespace:
         "num_frames": None,
         "num_inference_steps": None,
         "guidance_scale": None,
+        "generator": None,
         "seed": 123,
         "num_outputs_per_prompt": 1,
         "frame_rate": None,

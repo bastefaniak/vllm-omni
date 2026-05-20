@@ -38,12 +38,16 @@ class _FakeModel:
         return torch.cat([input_ids, torch.tensor([[99]], dtype=input_ids.dtype)], dim=-1)
 
 
-def test_qwen_guardrail_generation_accepts_batch_encoding() -> None:
+@pytest.mark.parametrize("as_batch_encoding", [True, False])
+def test_qwen_guardrail_generation_accepts_supported_tokenizer_outputs(as_batch_encoding: bool) -> None:
     from vllm_omni.diffusion.models.cosmos3.guardrails import _generate_qwen_guardrail_response
 
     input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
     attention_mask = torch.ones_like(input_ids)
-    tokenizer = _FakeTokenizer(BatchEncoding({"input_ids": input_ids, "attention_mask": attention_mask}))
+    model_inputs = (
+        BatchEncoding({"input_ids": input_ids, "attention_mask": attention_mask}) if as_batch_encoding else input_ids
+    )
+    tokenizer = _FakeTokenizer(model_inputs)
     model = _FakeModel()
 
     response = _generate_qwen_guardrail_response("a safe prompt", tokenizer, model, "cpu")
@@ -51,24 +55,12 @@ def test_qwen_guardrail_generation_accepts_batch_encoding() -> None:
     assert response == "safe"
     assert tokenizer.decoded_ids == [99]
     args, kwargs = model.calls[0]
-    assert args == ()
-    assert torch.equal(kwargs["input_ids"], input_ids)
-    assert torch.equal(kwargs["attention_mask"], attention_mask)
-    assert kwargs["max_new_tokens"] == 128
-
-
-def test_qwen_guardrail_generation_accepts_tensor_input_ids() -> None:
-    from vllm_omni.diffusion.models.cosmos3.guardrails import _generate_qwen_guardrail_response
-
-    input_ids = torch.tensor([[1, 2, 3]], dtype=torch.long)
-    tokenizer = _FakeTokenizer(input_ids)
-    model = _FakeModel()
-
-    response = _generate_qwen_guardrail_response("a safe prompt", tokenizer, model, "cpu")
-
-    assert response == "safe"
-    assert tokenizer.decoded_ids == [99]
-    args, kwargs = model.calls[0]
-    assert len(args) == 1
-    assert torch.equal(args[0], input_ids)
-    assert kwargs == {"max_new_tokens": 128}
+    if as_batch_encoding:
+        assert args == ()
+        assert torch.equal(kwargs["input_ids"], input_ids)
+        assert torch.equal(kwargs["attention_mask"], attention_mask)
+        assert kwargs["max_new_tokens"] == 128
+    else:
+        assert len(args) == 1
+        assert torch.equal(args[0], input_ids)
+        assert kwargs == {"max_new_tokens": 128}
