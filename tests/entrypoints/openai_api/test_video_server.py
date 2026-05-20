@@ -13,7 +13,6 @@ import threading
 import time
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,11 +38,17 @@ class MockVideoResult:
     def __init__(
         self,
         videos,
+        audios=None,
+        sample_rate=None,
         custom_output=None,
         stage_durations=None,
         peak_memory_mb=0.0,
     ):
         self.multimodal_output = {"video": videos}
+        if audios is not None:
+            self.multimodal_output["audio"] = audios
+        if sample_rate is not None:
+            self.multimodal_output["audio_sample_rate"] = sample_rate
         self._custom_output = custom_output or {}
         self.stage_durations = stage_durations or {}
         self.peak_memory_mb = peak_memory_mb
@@ -173,10 +178,49 @@ def test_async_video_generation_bypasses_base64(test_client, mocker: MockerFixtu
     mock_base64.assert_not_called()
 
 
+def test_async_video_generation_with_audio_bypasses_base64(test_client, mocker: MockerFixture):
+    """Regression test: Ensure async video generation passes audio through
+    generate_video_bytes without bouncing through base64 encoding."""
+    mock_encode = mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"raw-mp4-bytes",
+    )
+
+    mock_base64 = mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        side_effect=RuntimeError("Regression: async video path should not base64 encode"),
+    )
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+
+    async def _generate(prompt, request_id, sampling_params_list):
+        engine.captured_prompt = prompt
+        engine.captured_sampling_params_list = sampling_params_list
+        yield MockVideoResult([object()], audios=[object()], sample_rate=48000)
+
+    engine.generate = _generate
+
+    response = test_client.post(
+        "/v1/videos",
+        data={"prompt": "A base64 test with audio."},
+    )
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    mock_base64.assert_not_called()
+
+    mock_encode.assert_called_once()
+    kwargs = mock_encode.call_args.kwargs
+    assert "audio" in kwargs
+    assert kwargs["audio"] is not None
+    assert kwargs["audio_sample_rate"] == 48000
+
+
 def test_t2v_video_generation_form(test_client, mocker: MockerFixture):
     fps_values = []
 
-    def _fake_encode(video, fps, **kwargs):
+    def _fake_encode(video, fps, audio=None, audio_sample_rate=None, **kwargs):
         fps_values.append(fps)
         return b"fake-video"
 
@@ -291,7 +335,7 @@ def test_i2v_video_generation_with_image_reference_form(test_client, mocker: Moc
 def test_seconds_defaults_fps_and_frames(test_client, mocker: MockerFixture):
     fps_values = []
 
-    def _fake_encode(video, fps, **kwargs):
+    def _fake_encode(video, fps, audio=None, audio_sample_rate=None, **kwargs):
         fps_values.append(fps)
         return b"fake-video"
 
@@ -511,6 +555,47 @@ def test_worker_fps_multiplier_is_applied_to_async_encoding(test_client, mocker:
     video_id = response.json()["id"]
     _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
     assert fps_values == [16]
+
+
+def test_audio_sample_rate_comes_from_model_config(test_client, mocker: MockerFixture):
+    audio_sample_rates = []
+
+    def _fake_encode(video, fps, audio=None, audio_sample_rate=None, video_codec_options=None):
+        del video, fps, audio, video_codec_options
+        audio_sample_rates.append(audio_sample_rate)
+        return b"fake-video"
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    engine.model_config = SimpleNamespace(
+        hf_config=SimpleNamespace(
+            vocoder=SimpleNamespace(
+                config=SimpleNamespace(output_sampling_rate=16000),
+            ),
+        ),
+    )
+
+    async def _generate(prompt, request_id, sampling_params_list):
+        engine.captured_prompt = prompt
+        engine.captured_sampling_params_list = sampling_params_list
+        import numpy as np
+
+        yield MockVideoResult([np.zeros((1, 64, 64, 3), dtype=np.uint8)], audios=[object()])
+
+    engine.generate = _generate
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        side_effect=_fake_encode,
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={"prompt": "video with audio"},
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    assert audio_sample_rates == [16000]
 
 
 def test_video_job_persists_profiler_metadata(test_client, mocker: MockerFixture):
