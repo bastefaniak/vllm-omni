@@ -104,9 +104,7 @@ def test_transformer_sharding_offload_and_patch_round_trip_contracts() -> None:
 def test_forward_returns_video_prediction() -> None:
     from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import Cosmos3VFMTransformer
 
-    output = Cosmos3VFMTransformer(
-        SimpleNamespace(tf_model_config=_tiny_cosmos3_config(), dtype=torch.float32)
-    )(
+    output = Cosmos3VFMTransformer(SimpleNamespace(tf_model_config=_tiny_cosmos3_config(), dtype=torch.float32))(
         hidden_states=torch.zeros(1, 2, 1, 2, 2),
         timestep=torch.tensor([1.0]),
         text_ids=torch.tensor([[1, 2]], dtype=torch.long),

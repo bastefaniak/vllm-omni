@@ -1106,9 +1106,7 @@ class Cosmos3VFMTransformer(nn.Module):
             return
 
         adjust_detail = (
-            "Adjust the spatial resolution so that "
-            "t * ceil(h/patch) * ceil(w/patch) is a multiple "
-            "of ulysses_degree."
+            "Adjust the spatial resolution so that t * ceil(h/patch) * ceil(w/patch) is a multiple of ulysses_degree."
         )
         raise ValueError(
             f"GEN sequence length ({s_gen} video tokens {s_video}) must be divisible by "
