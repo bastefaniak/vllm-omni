@@ -35,26 +35,10 @@ _MODEL_PRESETS = {
         "fps": 24,
         "output": "hunyuan_video_15_output.mp4",
     },
-    "cosmos3": {
-        "height": 720,
-        "width": 1280,
-        "num_frames": 81,
-        "num_inference_steps": 35,
-        "guidance_scale": 4.0,
-        "fps": 24,
-        "output": "cosmos3_t2v_output.mp4",
-    },
 }
 
 
-def _is_cosmos3_model(model: str, model_class_name: str | None = None) -> bool:
-    combined = f"{model} {model_class_name or ''}".lower()
-    return "cosmos3" in combined or "cosmos-3" in combined
-
-
-def _detect_preset(model: str, model_class_name: str | None = None) -> dict:
-    if _is_cosmos3_model(model, model_class_name):
-        return _MODEL_PRESETS["cosmos3"]
+def _detect_preset(model: str) -> dict:
     model_lower = model.lower()
     if "hunyuan" in model_lower:
         return _MODEL_PRESETS["hunyuan"]
@@ -74,19 +58,19 @@ def parse_profiler_config(value: str) -> dict[str, Any]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate a video from a text prompt. "
-        "Supports Wan2.2, HunyuanVideo-1.5, Cosmos3, and other text-to-video models."
+        "Supports Wan2.2, HunyuanVideo-1.5, and other text-to-video models."
     )
     parser.add_argument(
         "--model",
         default="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         help="Diffusers model ID or local path. "
         "Examples: Wan-AI/Wan2.2-T2V-A14B-Diffusers, "
-        "hunyuanvideo-community/HunyuanVideo-1.5-480p_t2v, nvidia/Cosmos3-Nano",
+        "hunyuanvideo-community/HunyuanVideo-1.5-480p_t2v",
     )
     parser.add_argument(
         "--model-class-name",
         default=None,
-        help="Override model class name (e.g., Cosmos3OmniDiffusersPipeline or LTX2TwoStagesVideoPipeline).",
+        help="Override model class name (e.g., LTX2TwoStagesVideoPipeline).",
     )
     parser.add_argument("--prompt", default="A serene lakeside sunrise with mist over the water.", help="Text prompt.")
     parser.add_argument("--negative-prompt", default="", help="Negative prompt.")
@@ -124,7 +108,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         choices=["cache_dit"],
-        help="Cache backend for acceleration on supported models. Default: None.",
+        help="Cache backend for acceleration (Wan2.2). Default: None.",
     )
     parser.add_argument(
         "--enable-cache-dit-summary",
@@ -338,7 +322,7 @@ def main():
     print(f"  Video size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
-    prompt_dict = {"prompt": args.prompt, "modalities": ["video"]}
+    prompt_dict = {"prompt": args.prompt}
     if args.negative_prompt:
         prompt_dict["negative_prompt"] = args.negative_prompt
 
@@ -349,7 +333,6 @@ def main():
         guidance_scale=args.guidance_scale,
         num_inference_steps=args.num_inference_steps,
         num_frames=args.num_frames,
-        frame_rate=args.frame_rate if args.frame_rate is not None else float(args.fps),
     )
     if args.guidance_scale_high is not None:
         sampling_kwargs["guidance_scale_2"] = args.guidance_scale_high
