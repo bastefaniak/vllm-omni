@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import statistics
 import sys
 import tempfile
 import time
@@ -252,6 +253,25 @@ def parse_args() -> argparse.Namespace:
         default=None,
         choices=["cache_dit"],
         help="Cache backend for supported Cosmos3 generation paths.",
+    )
+    parser.add_argument(
+        "--disable-guardrails",
+        "--no-guardrails",
+        dest="disable_guardrails",
+        action="store_true",
+        help="Disable Cosmos3 text/video guardrails for this inference run.",
+    )
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Run benchmark mode: discard one warmup generation, then time benchmark generations.",
+    )
+    parser.add_argument(
+        "--benchmark-generations",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Number of timed generations for benchmark mode. Providing this flag implies --benchmark.",
     )
     parser.add_argument("--enable-layerwise-offload", action="store_true", help="Enable layerwise offload.")
     parser.add_argument("--vae-use-slicing", action="store_true", help="Enable VAE slicing.")
@@ -622,6 +642,8 @@ def _build_omni(args: argparse.Namespace) -> Omni:
         "cache_backend": args.cache_backend,
         "cache_config": _cache_config(args.cache_backend),
     }
+    if args.disable_guardrails:
+        kwargs["model_config"] = {"guardrails": False}
     if args.quantization is not None:
         kwargs["quantization"] = args.quantization
     return Omni(**kwargs)
@@ -637,6 +659,7 @@ def _build_prompt_and_extra(
     args: argparse.Namespace,
     task: str,
     action_mode: str | None,
+    flow_shift: float | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     vision_path = args.vision_path or args.image
 
@@ -662,8 +685,10 @@ def _build_prompt_and_extra(
 
     extra_args: dict[str, Any] = {}
 
-    if getattr(args, "flow_shift", None) is not None:
-        extra_args["flow_shift"] = float(args.flow_shift)
+    if flow_shift is not None:
+        extra_args["flow_shift"] = float(flow_shift)
+    if args.disable_guardrails:
+        extra_args["guardrails"] = False
 
     sound_enabled = bool(getattr(args, "generate_sound", False)) or task == "t2v_sound"
     if sound_enabled and action_mode is not None:
@@ -695,13 +720,17 @@ def _build_prompt_and_extra(
     return prompt, extra_args
 
 
-def _run_one(
-    omni: Omni,
-    args: argparse.Namespace,
-    task: str,
-    output_path: Path,
-    record_index: int | None = None,
-) -> None:
+def _benchmark_generation_count(args: argparse.Namespace) -> int | None:
+    if args.benchmark_generations is None:
+        if not args.benchmark:
+            return None
+        return 10
+    if args.benchmark_generations < 1:
+        raise ValueError(f"--benchmark-generations must be >= 1, got {args.benchmark_generations}.")
+    return args.benchmark_generations
+
+
+def _resolve_generation_options(args: argparse.Namespace, task: str) -> dict[str, Any]:
     defaults = TASK_DEFAULTS[task]
     height = args.height or defaults["height"]
     width = args.width or defaults["width"]
@@ -709,24 +738,60 @@ def _run_one(
     num_inference_steps = args.num_inference_steps or defaults["num_inference_steps"]
     guidance_scale = args.guidance_scale if args.guidance_scale is not None else defaults["guidance_scale"]
     fps = args.fps or defaults["fps"]
-    if args.flow_shift is None and defaults.get("flow_shift") is not None:
-        args.flow_shift = defaults["flow_shift"]
+    flow_shift = args.flow_shift if args.flow_shift is not None else defaults.get("flow_shift")
+    return {
+        "height": height,
+        "width": width,
+        "num_frames": num_frames,
+        "num_inference_steps": num_inference_steps,
+        "guidance_scale": guidance_scale,
+        "fps": fps,
+        "flow_shift": flow_shift,
+    }
 
-    action_mode = _resolve_action_mode(task, args)
-    prompt, extra_args = _build_prompt_and_extra(args, task, action_mode)
 
+def _build_sampling(
+    args: argparse.Namespace,
+    options: dict[str, Any],
+    extra_args: dict[str, Any],
+) -> OmniDiffusionSamplingParams:
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
-    sampling = OmniDiffusionSamplingParams(
-        height=height,
-        width=width,
+    return OmniDiffusionSamplingParams(
+        height=options["height"],
+        width=options["width"],
         generator=generator,
-        guidance_scale=guidance_scale,
-        num_inference_steps=num_inference_steps,
-        num_frames=num_frames,
-        frame_rate=float(fps),
-        extra_args=extra_args,
+        guidance_scale=options["guidance_scale"],
+        num_inference_steps=options["num_inference_steps"],
+        num_frames=options["num_frames"],
+        frame_rate=float(options["fps"]),
+        extra_args=dict(extra_args),
     )
 
+
+def _prompt_for_request(prompt: dict[str, Any]) -> dict[str, Any]:
+    request_prompt = dict(prompt)
+    if isinstance(request_prompt.get("multi_modal_data"), dict):
+        request_prompt["multi_modal_data"] = dict(request_prompt["multi_modal_data"])
+    if isinstance(request_prompt.get("additional_information"), dict):
+        request_prompt["additional_information"] = dict(request_prompt["additional_information"])
+    return request_prompt
+
+
+def _synchronize_device() -> None:
+    try:
+        current_omni_platform.synchronize()
+    except (AttributeError, NotImplementedError, RuntimeError, AssertionError):
+        pass
+
+
+def _print_generation_configuration(
+    args: argparse.Namespace,
+    task: str,
+    options: dict[str, Any],
+    action_mode: str | None,
+    record_index: int | None,
+    benchmark_generations: int | None = None,
+) -> None:
     print("Cosmos3 generation configuration:")
     print(f"  Task: {task}")
     if action_mode:
@@ -734,17 +799,63 @@ def _run_one(
     if record_index is not None:
         print(f"  Record: {record_index}")
     print(f"  Model: {args.model}")
-    print(f"  Size: {width}x{height}")
-    if num_frames is not None:
-        print(f"  Frames: {num_frames}")
-    print(f"  Steps: {num_inference_steps}")
-    print(f"  Guidance scale: {guidance_scale}")
-    if args.flow_shift is not None:
-        print(f"  Flow shift: {args.flow_shift}")
+    print(f"  Size: {options['width']}x{options['height']}")
+    if options["num_frames"] is not None:
+        print(f"  Frames: {options['num_frames']}")
+    print(f"  Steps: {options['num_inference_steps']}")
+    print(f"  Guidance scale: {options['guidance_scale']}")
+    if options["flow_shift"] is not None:
+        print(f"  Flow shift: {options['flow_shift']}")
+    if args.disable_guardrails:
+        print("  Guardrails: disabled")
+    if benchmark_generations is not None:
+        print("  Benchmark mode: enabled")
+        print("  Warmup generations: 1")
+        print(f"  Timed generations: {benchmark_generations}")
+        print("  Output saving: disabled")
 
+
+def _generate_once(
+    omni: Omni,
+    prompt: dict[str, Any],
+    args: argparse.Namespace,
+    options: dict[str, Any],
+    extra_args: dict[str, Any],
+    *,
+    use_tqdm: bool = True,
+) -> tuple[Any, float]:
+    sampling = _build_sampling(args, options, extra_args)
+    request_prompt = _prompt_for_request(prompt)
+    _synchronize_device()
     start = time.perf_counter()
-    outputs = omni.generate(prompt, sampling)
+    outputs = omni.generate(request_prompt, sampling, use_tqdm=use_tqdm)
+    _synchronize_device()
     elapsed = time.perf_counter() - start
+    return outputs, elapsed
+
+
+def _prepare_generation(
+    args: argparse.Namespace,
+    task: str,
+) -> tuple[dict[str, Any], str | None, dict[str, Any], dict[str, Any]]:
+    options = _resolve_generation_options(args, task)
+
+    action_mode = _resolve_action_mode(task, args)
+    prompt, extra_args = _build_prompt_and_extra(args, task, action_mode, options["flow_shift"])
+    return options, action_mode, prompt, extra_args
+
+
+def _run_one(
+    omni: Omni,
+    args: argparse.Namespace,
+    task: str,
+    output_path: Path,
+    record_index: int | None = None,
+) -> None:
+    options, action_mode, prompt, extra_args = _prepare_generation(args, task)
+    _print_generation_configuration(args, task, options, action_mode, record_index)
+
+    outputs, elapsed = _generate_once(omni, prompt, args, options, extra_args)
     print(f"Total generation time: {elapsed:.4f} seconds")
 
     if task == "t2i":
@@ -756,7 +867,11 @@ def _run_one(
 
     video, audio, returned_sample_rate, action = _extract_video_audio_action(outputs)
     _save_video(
-        video, output_path, fps=fps, audio=audio, audio_sample_rate=returned_sample_rate or args.audio_sample_rate
+        video,
+        output_path,
+        fps=options["fps"],
+        audio=audio,
+        audio_sample_rate=returned_sample_rate or args.audio_sample_rate,
     )
     print(f"Saved video to {output_path}")
 
@@ -769,6 +884,43 @@ def _run_one(
         print(f"Saved action metadata to {action_out}")
 
 
+def _run_benchmark(
+    omni: Omni,
+    args: argparse.Namespace,
+    task: str,
+    benchmark_generations: int,
+    record_index: int | None = None,
+) -> None:
+    options, action_mode, prompt, extra_args = _prepare_generation(args, task)
+    _print_generation_configuration(
+        args,
+        task,
+        options,
+        action_mode,
+        record_index,
+        benchmark_generations=benchmark_generations,
+    )
+
+    print("Running warmup generation...")
+    outputs, warmup_elapsed = _generate_once(omni, prompt, args, options, extra_args, use_tqdm=False)
+    del outputs
+    print(f"Warmup generation discarded: {warmup_elapsed:.4f} seconds")
+
+    print(f"Running {benchmark_generations} timed generation(s)...")
+    generation_times: list[float] = []
+    for _ in range(benchmark_generations):
+        outputs, elapsed = _generate_once(omni, prompt, args, options, extra_args, use_tqdm=False)
+        del outputs
+        generation_times.append(elapsed)
+
+    total_elapsed = sum(generation_times)
+    average_elapsed = statistics.mean(generation_times)
+    throughput = benchmark_generations / total_elapsed if total_elapsed > 0 else float("inf")
+    print(f"Benchmark total generation time: {total_elapsed:.4f} seconds")
+    print(f"Benchmark average generation time: {average_elapsed:.4f} seconds")
+    print(f"Benchmark throughput: {throughput:.4f} generations/second")
+
+
 def _record_output_path(base: Path, index: int, total: int) -> Path:
     if total <= 1:
         return base
@@ -778,6 +930,7 @@ def _record_output_path(base: Path, index: int, total: int) -> Path:
 def main() -> None:
     args = parse_args()
     cli_set = _cli_provided_attrs(sys.argv[1:])
+    benchmark_generations = _benchmark_generation_count(args)
 
     records: list[dict[str, Any]] = [{}]
     if args.input_json:
@@ -793,14 +946,24 @@ def main() -> None:
         record_args = argparse.Namespace(**vars(args))
         if record:
             _apply_record(record, record_args, cli_set)
-        output_path = _record_output_path(base_output, index, len(records))
-        _run_one(
-            omni,
-            record_args,
-            args.task,
-            output_path,
-            record_index=index if len(records) > 1 else None,
-        )
+        record_index = index if len(records) > 1 else None
+        if benchmark_generations is not None:
+            _run_benchmark(
+                omni,
+                record_args,
+                args.task,
+                benchmark_generations,
+                record_index=record_index,
+            )
+        else:
+            output_path = _record_output_path(base_output, index, len(records))
+            _run_one(
+                omni,
+                record_args,
+                args.task,
+                output_path,
+                record_index=record_index,
+            )
 
 
 if __name__ == "__main__":

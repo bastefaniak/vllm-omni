@@ -154,6 +154,8 @@ To bypass video loading/extraction, pass `--vision-path /path/to/still.jpg`.
 - `--action-path PATH_OR_URL`: action JSON for forward-dynamics.
 - `--action-mode {forward_dynamics,inverse_dynamics,policy}`: override action_mode (otherwise derived from `--task`).
 - `--generate-sound`: force-enable sound generation outside the `t2v_sound` task.
+- `--disable-guardrails` / `--no-guardrails`: disable Cosmos3 text/video guardrails for the run.
+- `--benchmark` or `--benchmark-generations N`: run one discarded warmup generation, then time `N` generations without saving outputs.
 - `--enable-layerwise-offload`: use layerwise offload for memory-constrained runs.
 - `--cache-backend cache_dit`: enable Cache-DiT where supported.
 - `--cfg-parallel-size 2`, `--ulysses-degree`, `--tensor-parallel-size`, `--use-hsdp`: enable parallel execution options.
