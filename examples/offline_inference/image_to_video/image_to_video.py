@@ -2,13 +2,14 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 """
-Image-to-Video generation example using Wan2.2 I2V/TI2V models, LTX2, or HunyuanVideo-1.5.
+Image-to-Video generation example using Wan2.2 I2V/TI2V models, LTX2, HunyuanVideo-1.5, or Cosmos3.
 
 Supports:
 - Wan2.2-I2V-A14B-Diffusers: MoE model with CLIP image encoder
 - Wan2.2-TI2V-5B-Diffusers: Unified T2V+I2V model (dense 5B)
 - LTX2 image-to-video pipeline
 - HunyuanVideo-1.5 I2V: SigLIP + VAE dual image conditioning
+- Cosmos3: unified text-to-image, text-to-video, and image-to-video pipeline
 
 Usage:
     # Wan I2V-A14B (MoE)
@@ -30,6 +31,13 @@ Usage:
     python image_to_video.py --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v \
         --image input.jpg --prompt "A cat playing with yarn" \
         --flow-shift 5.0 --guidance-scale 6.0
+
+    # Cosmos3 image-to-video
+    python image_to_video.py --model nvidia/Cosmos3-Nano \
+        --model-class-name Cosmos3OmniDiffusersPipeline \
+        --image input.jpg --prompt "A cinematic dolly shot of a boat" \
+        --height 720 --width 1280 --num-frames 81 \
+        --num-inference-steps 35 --guidance-scale 4.0 --fps 24
 """
 
 import argparse
@@ -60,7 +68,9 @@ def parse_profiler_config(value: str) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate a video from an image (Wan2.2, LTX2, HunyuanVideo-1.5).")
+    parser = argparse.ArgumentParser(
+        description="Generate a video from an image (Wan2.2, LTX2, HunyuanVideo-1.5, Cosmos3)."
+    )
     parser.add_argument(
         "--model",
         default="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
@@ -69,13 +79,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-class-name",
         default=None,
-        help="Override model class name (e.g., LTX2ImageToVideoPipeline).",
+        help="Override model class name (e.g., Cosmos3OmniDiffusersPipeline or LTX2ImageToVideoPipeline).",
     )
     parser.add_argument("--image", required=True, help="Path to input image.")
     parser.add_argument("--prompt", default="", help="Text prompt describing the desired motion.")
     parser.add_argument("--negative-prompt", default="", help="Negative prompt.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--guidance-scale", type=float, default=5.0, help="CFG scale.")
+    parser.add_argument("--guidance-scale", type=float, default=None, help="CFG scale. Default: model-specific.")
     parser.add_argument(
         "--guidance-scale-high", type=float, default=None, help="Optional separate CFG for high-noise (MoE only)."
     )
@@ -83,8 +93,10 @@ def parse_args() -> argparse.Namespace:
         "--height", type=int, default=None, help="Video height (auto-calculated from image if not set)."
     )
     parser.add_argument("--width", type=int, default=None, help="Video width (auto-calculated from image if not set).")
-    parser.add_argument("--num-frames", type=int, default=81, help="Number of frames.")
-    parser.add_argument("--num-inference-steps", type=int, default=50, help="Sampling steps.")
+    parser.add_argument("--num-frames", type=int, default=None, help="Number of frames. Default: model-specific.")
+    parser.add_argument(
+        "--num-inference-steps", type=int, default=None, help="Sampling steps. Default: model-specific."
+    )
     parser.add_argument("--boundary-ratio", type=float, default=0.875, help="Boundary split ratio for MoE models.")
     parser.add_argument(
         "--frame-rate",
@@ -93,7 +105,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional generation frame rate (used by models like LTX2). Defaults to --fps.",
     )
     parser.add_argument(
-        "--flow-shift", type=float, default=5.0, help="Scheduler flow_shift (5.0 for 720p, 12.0 for 480p)."
+        "--flow-shift",
+        type=float,
+        default=None,
+        help="Scheduler flow_shift. Default: model-specific.",
     )
     parser.add_argument(
         "--sample-solver",
@@ -261,31 +276,51 @@ def calculate_dimensions(
     return height, width
 
 
+def _is_cosmos3_model(model_name: str, model_class_name: str | None = None) -> bool:
+    combined = f"{model_name} {model_class_name or ''}".lower()
+    return "cosmos3" in combined or "cosmos-3" in combined
+
+
 def main():
     args = parse_args()
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
     model_name = str(args.model).lower() if args.model is not None else ""
     model_class_name = args.model_class_name
     is_ltx2 = "ltx2" in model_name or (model_class_name and "ltx2" in model_class_name.lower())
+    is_cosmos3 = _is_cosmos3_model(model_name, model_class_name)
     if model_class_name is None and is_ltx2:
         model_class_name = "LTX2ImageToVideoPipeline"
+    elif model_class_name is None and is_cosmos3:
+        model_class_name = "Cosmos3OmniDiffusersPipeline"
 
     # Load input image
     image = PIL.Image.open(args.image).convert("RGB")
 
-    fps = args.fps if args.fps is not None else (24 if is_ltx2 else 16)
+    fps = args.fps if args.fps is not None else (24 if (is_ltx2 or is_cosmos3) else 16)
     frame_rate = args.frame_rate if args.frame_rate is not None else float(fps)
-    guidance_scale = args.guidance_scale if args.guidance_scale is not None else (4.0 if is_ltx2 else 5.0)
+    guidance_scale = (
+        args.guidance_scale if args.guidance_scale is not None else (4.0 if (is_ltx2 or is_cosmos3) else 5.0)
+    )
     num_frames = args.num_frames if args.num_frames is not None else (121 if is_ltx2 else 81)
-    num_inference_steps = args.num_inference_steps if args.num_inference_steps is not None else (40 if is_ltx2 else 50)
+    num_inference_steps = (
+        args.num_inference_steps
+        if args.num_inference_steps is not None
+        else (40 if is_ltx2 else (35 if is_cosmos3 else 50))
+    )
 
     # Calculate dimensions if not provided
     height = args.height
     width = args.width
     if height is None or width is None:
-        # Default to 480P area for Wan2.2 I2V, 512x768 area for LTX2
-        max_area = 512 * 768 if is_ltx2 else 480 * 832
-        mod_value = 32 if is_ltx2 else 16
+        if is_ltx2:
+            max_area = 512 * 768
+            mod_value = 32
+        elif is_cosmos3:
+            max_area = 720 * 1280
+            mod_value = 16
+        else:
+            max_area = 480 * 832
+            mod_value = 16
         calc_height, calc_width = calculate_dimensions(image, max_area=max_area, mod_value=mod_value)
         height = height or calc_height
         width = width or calc_width
@@ -367,8 +402,10 @@ def main():
     print(f"\n{'=' * 60}")
     print("Generation Configuration:")
     print(f"  Model: {args.model}")
-    print(f"  Inference steps: {args.num_inference_steps}")
-    print(f"  Frames: {args.num_frames}")
+    if model_class_name:
+        print(f"  Model class: {model_class_name}")
+    print(f"  Inference steps: {num_inference_steps}")
+    print(f"  Frames: {num_frames}")
     print(f"  Solver: {args.sample_solver}")
     print(f"  diffusion_kv_cache_dtype(config): {args.diffusion_kv_cache_dtype}")
     print(f"  diffusion_kv_cache_skip_steps(config): {args.diffusion_kv_cache_skip_steps}")
@@ -378,7 +415,7 @@ def main():
         f" tensor_parallel_size={args.tensor_parallel_size}, vae_patch_parallel_size={args.vae_patch_parallel_size},"
         f" pipeline_parallel_size={args.pipeline_parallel_size}"
     )
-    print(f"  Video size: {args.width}x{args.height}")
+    print(f"  Video size: {width}x{height}")
     print(f"{'=' * 60}\n")
 
     generation_start = time.perf_counter()
@@ -387,6 +424,7 @@ def main():
         {
             "prompt": args.prompt,
             "negative_prompt": args.negative_prompt,
+            "modalities": ["video"],
             "multi_modal_data": {"image": image},
         },
         OmniDiffusionSamplingParams(

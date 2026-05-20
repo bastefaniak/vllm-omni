@@ -194,6 +194,7 @@ Factory function `get_offload_backend()` selects the appropriate backend based o
 | OvisImagePipeline | `AIDC-AI/Ovis-Image-7B` | `OvisImageTransformer2DModel` | - | ✓ | `"transformer"` |
 | QwenImagePipeline | `Qwen/Qwen-Image` | `QwenImageTransformer2DModel` | ✓ | ✓ | `"transformer_blocks"` |
 | StableDiffusion3Pipeline | `stabilityai/stable-diffusion-3.5-medium` | `SD3Transformer2DModel` | - | ✓ | `"transformer_blocks"` |
+| Cosmos3OmniDiffusersPipeline | `nvidia/Cosmos3-Nano` | `Cosmos3VFMTransformer` | - | ✓ | `"gen_layers"` |
 | Wan22I2VPipeline | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | Wan22Pipeline | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | `WanTransformer3DModel` | ✓ | ✓ | `"blocks"` |
 | BagelPipeline | `ByteDance-Seed/BAGEL-7B-MoT` | `Qwen2MoTModel` | - | ✓ | `"layers"`, `"customized modules"` |
@@ -201,3 +202,4 @@ Factory function `get_offload_backend()` selects the appropriate backend based o
 **Notes:**
 - Model-Level Offloading is expected to be supported by all common diffusion models (DiT and encoders) naturally
 - Layerwise Offloading requires DiT class to define `_layerwise_offload_blocks_attrs` pointing to transformer blocks
+- Cosmos3 uses the singular `_layerwise_offload_blocks_attr` compatibility path and offloads GEN decoder layers.

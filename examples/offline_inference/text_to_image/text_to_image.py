@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
         "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512, stepfun-ai/NextStep-1.1, "
         "black-forest-labs/FLUX.1-dev, black-forest-labs/FLUX.2-klein-9B, "
         "black-forest-labs/FLUX.2-dev, tencent/HunyuanImage-3.0-Instruct, "
-        "meituan-longcat/LongCat-Image, OvisAI/Ovis-Image, "
+        "meituan-longcat/LongCat-Image, OvisAI/Ovis-Image, nvidia/Cosmos3-Nano, "
         "stabilityai/stable-diffusion-3.5-medium, Tongyi-MAI/Z-Image-Turbo and etc.",
     )
     parser.add_argument(
@@ -456,6 +456,7 @@ def main():
         {
             "prompt": args.prompt,
             "negative_prompt": args.negative_prompt,
+            "modalities": ["image"],
         },
         OmniDiffusionSamplingParams(
             height=args.height,

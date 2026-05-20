@@ -144,6 +144,15 @@ sampling_params = OmniDiffusionSamplingParams(
 )
 ```
 
+For Cosmos3, use `guidance_scale` rather than `true_cfg_scale`:
+
+```python
+sampling_params = OmniDiffusionSamplingParams(
+    num_inference_steps=35,
+    guidance_scale=4.0,
+)
+```
+
 2. **Add negative prompt:**
 ```python
 outputs = omni.generate(

@@ -18,6 +18,7 @@ nav:
     - Offline Inference:
       - BAGEL-7B-MoT: user_guide/examples/offline_inference/bagel.md
       - GLM-Image Multistage End-to-End Inference: user_guide/examples/offline_inference/glm_image.md
+      - Cosmos3: user_guide/examples/offline_inference/cosmos3.md
       - Helios Video Generation: user_guide/examples/offline_inference/helios.md
       - HunyuanImage-3.0 Image-to-Text Inference: user_guide/examples/offline_inference/hunyuan_image3.md
       - Image-To-Image: user_guide/examples/offline_inference/image_to_image.md
@@ -35,6 +36,7 @@ nav:
     - Online Serving:
       - BAGEL-7B-MoT: user_guide/examples/online_serving/bagel.md
       - vLLM-Omni Helm Chart: user_guide/examples/online_serving/chart-helm.md
+      - Cosmos3: user_guide/examples/online_serving/cosmos3.md
       - Diffusers Backend Adapter: user_guide/examples/online_serving/diffusers_pipeline_adapter.md
       - GLM-Image Online Serving: user_guide/examples/online_serving/glm_image.md
       - Image-To-Image: user_guide/examples/online_serving/image_to_image.md
