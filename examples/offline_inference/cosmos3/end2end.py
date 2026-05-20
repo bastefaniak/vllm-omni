@@ -356,8 +356,8 @@ def _load_video_frames_from(path_or_url: str, max_frames: int) -> list[PIL.Image
         import imageio.v3 as iio  # type: ignore[import-not-found]
     except ImportError as exc:
         raise ImportError(
-            "Loading video frames for Cosmos3 action forward-dynamics requires imageio. "
-            "Install with `pip install imageio[ffmpeg]` or pass a still image via --vision-path."
+            "Loading video frames for Cosmos3 action video input requires imageio. "
+            "Install with `pip install imageio[ffmpeg]`."
         ) from exc
 
     local = _resolve_local_path(path_or_url)
@@ -659,6 +659,7 @@ def _build_prompt_and_extra(
     args: argparse.Namespace,
     task: str,
     action_mode: str | None,
+    num_frames: int | None,
     flow_shift: float | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     vision_path = args.vision_path or args.image
@@ -672,8 +673,8 @@ def _build_prompt_and_extra(
     if task in _VIDEO_INPUT_TASKS:
         if not vision_path:
             raise ValueError(f"--vision-path (video) is required for {task}.")
-        local_video = _resolve_local_path(vision_path)
-        prompt["multi_modal_data"] = {"video": local_video}
+        max_frames = int(num_frames if num_frames is not None else args.action_chunk_size + 1)
+        prompt["multi_modal_data"] = {"video": _load_video_frames_from(vision_path, max_frames)}
     elif task == "action_forward_dynamics" and vision_path and _is_video_path(vision_path):
         prompt["multi_modal_data"] = {"video": _load_video_frames_from(vision_path, args.action_chunk_size + 1)}
     elif task in _IMAGE_INPUT_TASKS:
@@ -841,7 +842,13 @@ def _prepare_generation(
     options = _resolve_generation_options(args, task)
 
     action_mode = _resolve_action_mode(task, args)
-    prompt, extra_args = _build_prompt_and_extra(args, task, action_mode, options["flow_shift"])
+    prompt, extra_args = _build_prompt_and_extra(
+        args,
+        task,
+        action_mode,
+        options["num_frames"],
+        options["flow_shift"],
+    )
     return options, action_mode, prompt, extra_args
 
 

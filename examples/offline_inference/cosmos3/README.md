@@ -136,8 +136,9 @@ python end2end.py --task action_inverse_dynamics \
 
 ## Video assets for action modes
 
-`forward_dynamics` uses the first `action_chunk_size + 1` frames when `--vision-path` resolves to a
-video file, matching the native Cosmos3 action loader. Still images are also accepted as a fallback.
+`inverse_dynamics` and `forward_dynamics` load action video inputs into frame lists before dispatching
+the request. `forward_dynamics` uses the first `action_chunk_size + 1` frames when `--vision-path`
+resolves to a video file, matching the native Cosmos3 action loader. Still images are also accepted as a fallback.
 `policy` uses a still image; when its `--vision-path` resolves to a video file, end2end.py extracts
 the first frame automatically. Video frame loading requires `imageio` with the ffmpeg plugin:
 
