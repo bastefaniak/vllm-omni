@@ -75,17 +75,9 @@ class StubCosmos3Transformer(nn.Module):
         self,
         *,
         latent_channel_size: int = 2,
-        sound_gen: bool = False,
-        sound_dim: int = 3,
-        action_gen: bool = False,
-        action_dim: int = 4,
     ) -> None:
         super().__init__()
         self.latent_channel_size = latent_channel_size
-        self.sound_gen = sound_gen
-        self.sound_dim = sound_dim
-        self.action_gen = action_gen
-        self.action_dim = action_dim
         self.cached_kv: Any | None = None
         self.cached_freqs_gen: Any | None = None
         self.calls: list[dict[str, Any]] = []
@@ -104,9 +96,8 @@ class StubCosmos3Transformer(nn.Module):
         text_ids: torch.Tensor,
         text_mask: torch.Tensor,
         **kwargs: Any,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         token = int(text_ids.reshape(-1)[0].item()) if text_ids.numel() else 0
-        sound_latents = kwargs.get("sound_latents")
         self.calls.append(
             {
                 "token": token,
@@ -120,13 +111,7 @@ class StubCosmos3Transformer(nn.Module):
             marker = torch.tensor([token], dtype=torch.float32)
             self.cached_kv = [(marker, marker + 100)]
             self.cached_freqs_gen = (marker + 200, marker + 300)
-        action_latents = kwargs.get("action_latents")
-        outputs: list[torch.Tensor] = [torch.full_like(hidden_states, float(token))]
-        if action_latents is not None:
-            outputs.append(torch.full_like(action_latents, float(token + 20)))
-        if sound_latents is not None:
-            outputs.append(torch.full_like(sound_latents, float(token + 10)))
-        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+        return torch.full_like(hidden_states, float(token))
 
 
 def passthrough_progress_bar(iterable):
@@ -167,7 +152,6 @@ def make_cosmos3_pipeline():
         pipeline._guidance_scale = None
         pipeline._num_timesteps = None
         pipeline.progress_bar = passthrough_progress_bar
-        pipeline._sound_tokenizer = None
         return pipeline
 
     return _make

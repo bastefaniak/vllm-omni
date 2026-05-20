@@ -17,7 +17,6 @@ from vllm.logger import init_logger
 from vllm_omni.diffusion.data import GuardrailViolationError
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.protocol.videos import (
-    VideoAction,
     VideoData,
     VideoGenerationRequest,
     VideoGenerationResponse,
@@ -45,9 +44,6 @@ class VideoGenerationArtifacts:
     """Normalized outputs and profiler metadata extracted from one request."""
 
     videos: list[Any]
-    audios: list[Any | None]
-    actions: list[VideoAction | None]
-    audio_sample_rate: int
     output_fps: int
     stage_durations: dict[str, float]
     peak_memory_mb: float
@@ -98,7 +94,7 @@ class OmniOpenAIServingVideo:
         *,
         reference_image: ReferenceImage | None = None,
     ) -> VideoGenerationArtifacts:
-        """Run the generation pipeline and extract video/audio/profiler outputs."""
+        """Run the generation pipeline and extract video/profiler outputs."""
         prompt: OmniTextPrompt = OmniTextPrompt(prompt=request.prompt, modalities=["video"])
         if request.negative_prompt is not None:
             prompt["negative_prompt"] = request.negative_prompt
@@ -151,10 +147,6 @@ class OmniOpenAIServingVideo:
         )
         if "flow_shift" in provided_fields and request.flow_shift is not None:
             gen_params.extra_args["flow_shift"] = request.flow_shift
-        if "generate_sound" in provided_fields:
-            gen_params.extra_args["generate_sound"] = request.generate_sound
-        if "sound_duration" in provided_fields and request.sound_duration is not None:
-            gen_params.extra_args["sound_duration"] = request.sound_duration
 
         # Apply model-specific extra parameters
         if request.extra_params is not None:
@@ -179,15 +171,9 @@ class OmniOpenAIServingVideo:
 
         result = await self._run_generation(prompt, gen_params, reference_id)
         videos = self._extract_video_outputs(result)
-        audios = self._extract_audio_outputs(result, expected_count=len(videos))
-        actions = self._extract_action_outputs(result, expected_count=len(videos))
-        audio_sample_rate = self._resolve_audio_sample_rate(result)
         output_fps = (vp.fps or self._resolve_fps(result) or 24) * self._resolve_video_fps_multiplier(result)
         return VideoGenerationArtifacts(
             videos=videos,
-            audios=audios,
-            actions=actions,
-            audio_sample_rate=audio_sample_rate,
             output_fps=output_fps,
             stage_durations=self._extract_stage_durations(result),
             peak_memory_mb=self._extract_peak_memory_mb(result),
@@ -210,20 +196,13 @@ class OmniOpenAIServingVideo:
         _t_encode_start = time.perf_counter()
         video_data = [
             VideoData(
-                b64_json=(
-                    encode_video_base64(video, fps=artifacts.output_fps, video_codec_options=video_codec_options)
-                    if artifacts.audios[idx] is None
-                    else encode_video_base64(
-                        video,
-                        fps=artifacts.output_fps,
-                        audio=artifacts.audios[idx],
-                        audio_sample_rate=artifacts.audio_sample_rate,
-                        video_codec_options=video_codec_options,
-                    )
+                b64_json=encode_video_base64(
+                    video,
+                    fps=artifacts.output_fps,
+                    video_codec_options=video_codec_options,
                 ),
-                action=artifacts.actions[idx],
             )
-            for idx, video in enumerate(artifacts.videos)
+            for video in artifacts.videos
         ]
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4+base64): %.2f ms", _t_encode_ms)
@@ -240,7 +219,7 @@ class OmniOpenAIServingVideo:
         reference_id: str,
         *,
         reference_image: ReferenceImage | None = None,
-    ) -> tuple[bytes, dict[str, float], float, VideoAction | None]:
+    ) -> tuple[bytes, dict[str, float], float]:
         """Generate a video and return raw MP4 bytes, bypassing base64 encoding."""
         artifacts = await self._run_and_extract(request, reference_id, reference_image=reference_image)
         if len(artifacts.videos) > 1:
@@ -249,8 +228,6 @@ class OmniOpenAIServingVideo:
                 reference_id,
                 len(artifacts.videos),
             )
-        audio = artifacts.audios[0]
-
         video_codec_options = {"preset": "ultrafast", "threads": "0"}
         if request.extra_params is not None and isinstance(request.extra_params, dict):
             if "video_codec_options" in request.extra_params:
@@ -260,12 +237,11 @@ class OmniOpenAIServingVideo:
         video_bytes = _encode_video_bytes(
             artifacts.videos[0],
             fps=artifacts.output_fps,
-            **({"audio": audio, "audio_sample_rate": artifacts.audio_sample_rate} if audio is not None else {}),
             video_codec_options=video_codec_options,
         )
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
-        return video_bytes, artifacts.stage_durations, artifacts.peak_memory_mb, artifacts.actions[0]
+        return video_bytes, artifacts.stage_durations, artifacts.peak_memory_mb
 
     @staticmethod
     def _resolve_video_fps_multiplier(result: Any) -> int:
@@ -408,50 +384,6 @@ class OmniOpenAIServingVideo:
         return normalized
 
     @staticmethod
-    def _extract_audio_outputs(result: Any, expected_count: int) -> list[Any | None]:
-        audio = None
-        if hasattr(result, "multimodal_output") and result.multimodal_output:
-            audio = result.multimodal_output.get("audio")
-        elif hasattr(result, "request_output"):
-            request_output = result.request_output
-            if isinstance(request_output, dict) and request_output.get("multimodal_output"):
-                mm_output = request_output.get("multimodal_output") or {}
-                audio = mm_output.get("audio")
-            elif hasattr(request_output, "multimodal_output") and request_output.multimodal_output:
-                audio = request_output.multimodal_output.get("audio")
-
-        if audio is None:
-            return [None] * expected_count
-
-        if isinstance(audio, (list, tuple)):
-            if len(audio) == expected_count and any(hasattr(item, "shape") or hasattr(item, "ndim") for item in audio):
-                return list(audio)
-            if expected_count == 1:
-                return [audio]
-
-        if hasattr(audio, "ndim") and getattr(audio, "ndim", None) is not None and audio.ndim > 1:
-            first_dim = getattr(audio, "shape", [0])[0]
-            if first_dim == expected_count:
-                return [audio[i] for i in range(expected_count)]
-
-        if expected_count == 1:
-            return [audio]
-
-        return [audio] + [None] * max(expected_count - 1, 0)
-
-    @classmethod
-    def _extract_action_outputs(cls, result: Any, expected_count: int) -> list[VideoAction | None]:
-        custom_output = cls._extract_custom_output(result)
-        if not custom_output or "action" not in custom_output:
-            return [None] * expected_count
-
-        action_items = cls._split_action_payload(custom_output["action"], expected_count)
-        return [
-            cls._make_video_action(action_item, custom_output) if action_item is not None else None
-            for action_item in action_items
-        ]
-
-    @staticmethod
     def _extract_custom_output(result: Any) -> dict[str, Any]:
         custom_output = getattr(result, "custom_output", None)
         if isinstance(custom_output, dict):
@@ -468,102 +400,6 @@ class OmniOpenAIServingVideo:
                 custom_output = getattr(request_output, "_custom_output", None)
 
         return custom_output if isinstance(custom_output, dict) else {}
-
-    @classmethod
-    def _split_action_payload(cls, action: Any, expected_count: int) -> list[Any | None]:
-        if expected_count <= 0:
-            return []
-
-        shape = cls._shape_of(action)
-        if len(shape) >= 3:
-            count = min(shape[0], expected_count)
-            actions = [cls._index_action(action, i) for i in range(count)]
-            actions.extend([None] * (expected_count - count))
-            return actions
-
-        return [action] + [None] * (expected_count - 1)
-
-    @classmethod
-    def _make_video_action(cls, action: Any, custom_output: dict[str, Any]) -> VideoAction:
-        data = cls._to_jsonable(action)
-        if not isinstance(data, list):
-            data = [data]
-
-        action_mode = custom_output.get("action_mode")
-        return VideoAction(
-            data=data,
-            shape=cls._shape_of(action),
-            dtype=cls._dtype_of(action),
-            raw_action_dim=cls._coerce_optional_int(custom_output.get("raw_action_dim")),
-            action_mode=str(action_mode) if action_mode is not None else None,
-            domain_id=cls._coerce_optional_int(custom_output.get("domain_id")),
-        )
-
-    @staticmethod
-    def _index_action(action: Any, index: int) -> Any:
-        try:
-            return action[index]
-        except (IndexError, KeyError, TypeError):
-            return None
-
-    @classmethod
-    def _to_jsonable(cls, value: Any) -> Any:
-        if hasattr(value, "detach"):
-            value = value.detach()
-        if hasattr(value, "cpu"):
-            value = value.cpu()
-        if hasattr(value, "tolist"):
-            return cls._to_jsonable(value.tolist())
-        if isinstance(value, (list, tuple)):
-            return [cls._to_jsonable(item) for item in value]
-        if hasattr(value, "item"):
-            try:
-                return value.item()
-            except (TypeError, ValueError):
-                pass
-        return value
-
-    @classmethod
-    def _shape_of(cls, value: Any) -> list[int]:
-        shape = getattr(value, "shape", None)
-        if shape is not None:
-            try:
-                return [int(dim) for dim in shape]
-            except (TypeError, ValueError):
-                pass
-        if isinstance(value, (list, tuple)):
-            if not value:
-                return [0]
-            return [len(value)] + cls._shape_of(value[0])
-        return []
-
-    @staticmethod
-    def _dtype_of(value: Any) -> str | None:
-        dtype = getattr(value, "dtype", None)
-        return str(dtype) if dtype is not None else None
-
-    @staticmethod
-    def _coerce_optional_int(value: Any) -> int | None:
-        if value is None:
-            return None
-        try:
-            value = value.item() if hasattr(value, "item") else value
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _resolve_audio_sample_rate(self, result: Any) -> int:
-        result_sample_rate = self._extract_audio_sample_rate_from_result(result)
-        if result_sample_rate is not None:
-            return result_sample_rate
-
-        model_config = getattr(self._engine_client, "model_config", None)
-        hf_config = getattr(model_config, "hf_config", None)
-        config_sample_rate = self._extract_audio_sample_rate_from_config(hf_config)
-        if config_sample_rate is not None:
-            return config_sample_rate
-
-        return 24000
 
     @staticmethod
     def _resolve_fps(result: Any) -> int | None:
@@ -604,86 +440,6 @@ class OmniOpenAIServingVideo:
                         pass
 
         return None
-
-    @classmethod
-    def _extract_audio_sample_rate_from_result(cls, result: Any) -> int | None:
-        multimodal_output = getattr(result, "multimodal_output", None)
-        if isinstance(multimodal_output, dict):
-            sample_rate = cls._coerce_audio_sample_rate(
-                multimodal_output.get("audio_sample_rate")
-                or multimodal_output.get("sample_rate")
-                or multimodal_output.get("sampling_rate")
-                or multimodal_output.get("sr")
-            )
-            if sample_rate is not None:
-                return sample_rate
-
-        request_output = getattr(result, "request_output", None)
-        if isinstance(request_output, dict):
-            multimodal_output = request_output.get("multimodal_output") or {}
-            if isinstance(multimodal_output, dict):
-                return cls._coerce_audio_sample_rate(
-                    multimodal_output.get("audio_sample_rate")
-                    or multimodal_output.get("sample_rate")
-                    or multimodal_output.get("sampling_rate")
-                    or multimodal_output.get("sr")
-                )
-        elif hasattr(request_output, "multimodal_output"):
-            multimodal_output = getattr(request_output, "multimodal_output", None)
-            if isinstance(multimodal_output, dict):
-                return cls._coerce_audio_sample_rate(
-                    multimodal_output.get("audio_sample_rate")
-                    or multimodal_output.get("sample_rate")
-                    or multimodal_output.get("sampling_rate")
-                    or multimodal_output.get("sr")
-                )
-
-        return None
-
-    @classmethod
-    def _extract_audio_sample_rate_from_config(cls, config: Any) -> int | None:
-        if config is None:
-            return None
-
-        for attr_name in ("output_sampling_rate", "audio_sample_rate", "sample_rate", "sampling_rate"):
-            raw_value = config.get(attr_name) if isinstance(config, dict) else getattr(config, attr_name, None)
-            sample_rate = cls._coerce_audio_sample_rate(raw_value)
-            if sample_rate is not None:
-                return sample_rate
-
-        for component_name in ("vocoder", "audio_vae"):
-            component = (
-                config.get(component_name) if isinstance(config, dict) else getattr(config, component_name, None)
-            )
-            if component is None:
-                continue
-
-            sample_rate = cls._extract_audio_sample_rate_from_config(component)
-            if sample_rate is not None:
-                return sample_rate
-
-            component_config = (
-                component.get("config") if isinstance(component, dict) else getattr(component, "config", None)
-            )
-            sample_rate = cls._extract_audio_sample_rate_from_config(component_config)
-            if sample_rate is not None:
-                return sample_rate
-
-        return None
-
-    @staticmethod
-    def _coerce_audio_sample_rate(value: Any) -> int | None:
-        if value is None:
-            return None
-
-        try:
-            sample_rate = value.item() if hasattr(value, "item") else value
-            sample_rate = int(sample_rate)
-        except (TypeError, ValueError):
-            return None
-
-        return sample_rate if sample_rate > 0 else None
-
     @staticmethod
     def _extract_stage_durations(result: Any) -> dict[str, float]:
         stage_durations = getattr(result, "stage_durations", None)

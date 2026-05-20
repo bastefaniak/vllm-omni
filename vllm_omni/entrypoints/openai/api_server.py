@@ -2449,7 +2449,7 @@ async def _run_video_generation_job(
     started_at = time.perf_counter()
     output_path = None
     try:
-        video_bytes, stage_durations, peak_memory_mb, action = await handler.generate_video_bytes(
+        video_bytes, stage_durations, peak_memory_mb = await handler.generate_video_bytes(
             request, video_id, reference_image=reference_image
         )
 
@@ -2467,7 +2467,6 @@ async def _run_video_generation_job(
                 "inference_time_s": time.perf_counter() - started_at,
                 "stage_durations": stage_durations,
                 "peak_memory_mb": peak_memory_mb,
-                "action": action,
             },
         )
     except (EngineGenerateError, EngineDeadError) as exc:
@@ -2532,8 +2531,6 @@ async def _parse_video_form(
     flow_shift: float | None = Form(default=None),
     true_cfg_scale: float | None = Form(default=None),
     seed: int | None = Form(default=None),
-    generate_sound: bool | None = Form(default=None),
-    sound_duration: float | None = Form(default=None, gt=0.0),
     negative_prompt: str | None = Form(default=None),
     enable_frame_interpolation: bool | None = Form(default=None),
     frame_interpolation_exp: int | None = Form(default=None, ge=1),
@@ -2574,8 +2571,6 @@ async def _parse_video_form(
         "flow_shift": flow_shift,
         "true_cfg_scale": true_cfg_scale,
         "seed": seed,
-        "generate_sound": generate_sound,
-        "sound_duration": sound_duration,
         "negative_prompt": negative_prompt,
         "enable_frame_interpolation": enable_frame_interpolation,
         "frame_interpolation_exp": frame_interpolation_exp,
@@ -2679,7 +2674,7 @@ async def create_video_sync(
     raw_request.state.request_metadata = RequestResponseMetadata(request_id=request_id)
     started_at = time.perf_counter()
     try:
-        video_bytes, stage_durations, peak_memory_mb, _action = await asyncio.wait_for(
+        video_bytes, stage_durations, peak_memory_mb = await asyncio.wait_for(
             handler.generate_video_bytes(request, request_id, reference_image=reference_image),
             timeout=VIDEO_SYNC_TIMEOUT_S,
         )

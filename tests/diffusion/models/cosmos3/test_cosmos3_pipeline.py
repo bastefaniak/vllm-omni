@@ -48,7 +48,7 @@ def test_pipeline_registered_and_exported() -> None:
     assert "Cosmos3OmniDiffusersPipeline" in cosmos3.__all__
 
 
-def test_preprocess_i2v_image_and_action_video_inputs() -> None:
+def test_preprocess_i2v_image_input() -> None:
     from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import get_cosmos3_pre_process_func
 
     preprocess = get_cosmos3_pre_process_func(SimpleNamespace())
@@ -61,18 +61,8 @@ def test_preprocess_i2v_image_and_action_video_inputs() -> None:
     assert (result.sampling_params.height, result.sampling_params.width) == (672, 1344)
     assert tuple(result.prompts[0]["additional_information"]["preprocessed_image"].shape[-2:]) == (672, 1344)
 
-    frames = [Image.new("RGB", (8, 4), color) for color in ("red", "green", "blue")]
-    action = SimpleNamespace(
-        prompts=[{"prompt": "Move.", "multi_modal_data": {"video": frames}}],
-        sampling_params=SimpleNamespace(height=16, width=32, extra_args={"action_mode": "forward_dynamics"}),
-    )
 
-    additional = preprocess(action).prompts[0]["additional_information"]
-    assert tuple(additional["preprocessed_image"].shape) == (1, 3, 16, 32)
-    assert tuple(additional["preprocessed_video"].shape) == (1, 3, 3, 16, 32)
-
-
-def test_postprocess_handles_image_video_audio_and_validation() -> None:
+def test_postprocess_handles_image_video_and_validation() -> None:
     from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import get_cosmos3_post_process_func
 
     func = get_cosmos3_post_process_func(SimpleNamespace())
@@ -81,13 +71,6 @@ def test_postprocess_handles_image_video_audio_and_validation() -> None:
     assert func(video, output_type="latent") is video
     assert func({"image": video})[0].size == (4, 4)
     assert "video" in func({"video": video})
-    assert (
-        func(
-            {"video": video, "audio": torch.ones(1, 2, 16), "audio_sample_rate": 48000},
-            sampling_params=SimpleNamespace(extra_args={"resolved_frame_rate": 12}),
-        )["audio_sample_rate"]
-        == 48000
-    )
 
     with pytest.raises(ValueError, match="text-to-image postprocess expects"):
         func({"image": torch.zeros(1, 3, 2, 4, 4)})
@@ -121,14 +104,12 @@ def test_prompt_formatting_and_checkpoint_key_remap(make_cosmos3_pipeline) -> No
         "model.embed_tokens.weight": "transformer.language_model.embed_tokens.weight",
         "model.layers.3.self_attn.q_proj.weight": "transformer.language_model.layers.3.self_attn.q_proj.weight",
         "model.layers.3.self_attn.q_proj_moe_gen.weight": "transformer.gen_layers.3.cross_attention.q_proj.weight",
-        "sound2llm.weight": "transformer.sound2llm.weight",
-        "action_modality_embed.weight": "transformer.action_modality_embed",
         "lm_head.weight": None,
     }
     assert {key: Cosmos3OmniDiffusersPipeline._remap_ckpt_key(key) for key in remaps} == remaps
 
 
-def test_prepare_latents_for_video_image_sound_and_action(make_cosmos3_pipeline) -> None:
+def test_prepare_latents_for_video_and_image(make_cosmos3_pipeline) -> None:
     pipeline = make_cosmos3_pipeline()
     latents = pipeline._prepare_latents(16, 24, 5, torch.Generator(device="cpu").manual_seed(0))
     assert latents.shape == (1, 2, 2, 2, 3)
@@ -141,36 +122,8 @@ def test_prepare_latents_for_video_image_sound_and_action(make_cosmos3_pipeline)
     assert velocity_mask.tolist() == [[[[[0.0]], [[1.0]]]]]
     assert image_latent.shape == (1, 2, 1, 2, 3)
 
-    pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, sound_gen=True, sound_dim=3)
-    pipeline._sound_tokenizer = SimpleNamespace(
-        sample_rate=10,
-        latent_ch=3,
-        hop_size=4,
-        decode=lambda x: torch.ones(x.shape[0], 2, 24),
-    )
-    assert pipeline._resolve_sound_target_samples(SimpleNamespace(extra_args={"sound_duration": 2.0}), 9, 3.0) == (
-        20,
-        2.0,
-        10,
-    )
-    sound_latents, latent_frames = pipeline._prepare_sound_latents(21, torch.Generator(device="cpu").manual_seed(0))
-    assert (sound_latents.shape, latent_frames) == (torch.Size([1, 3, 6]), 6)
-    assert pipeline._decode_sound_latents(torch.zeros(1, 3, 6), target_audio_samples=21).shape == (1, 2, 21)
 
-    pipeline.transformer = pipeline.transformer.__class__(action_gen=True, action_dim=4)
-    action, action_mask, clean, raw_dim = pipeline._prepare_action_latents(
-        mode="forward_dynamics",
-        action_chunk_size=2,
-        raw_action_dim=None,
-        generator=torch.Generator(device="cpu").manual_seed(0),
-        sp=SimpleNamespace(extra_args={"action": [[1.0, 2.0], [3.0, 4.0]]}),
-    )
-    assert raw_dim == 2
-    assert action_mask.tolist() == [[[0.0], [0.0]]]
-    torch.testing.assert_close(action, clean)
-
-
-def test_diffuse_covers_cfg_i2v_and_multimodal_steps(make_cosmos3_pipeline) -> None:
+def test_diffuse_covers_cfg_and_i2v_steps(make_cosmos3_pipeline) -> None:
     pipeline = make_cosmos3_pipeline()
     latents = torch.zeros(1, 2, 1, 1, 1)
 
@@ -202,23 +155,6 @@ def test_diffuse_covers_cfg_i2v_and_multimodal_steps(make_cosmos3_pipeline) -> N
     )
     torch.testing.assert_close(i2v[:, :, 0:1], torch.full((1, 2, 1, 1, 1), 7.0))
 
-    pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, action_gen=True, action_dim=4)
-    video_result, action_result = pipeline.diffuse(
-        latents=latents,
-        action_latents=torch.zeros(1, 3, 4),
-        action_velocity_mask=torch.ones(1, 3, 1),
-        action_condition_latents=torch.zeros(1, 3, 4),
-        timesteps=torch.tensor([7, 3]),
-        cond_ids=_ids(2),
-        cond_mask=_mask(),
-        uncond_ids=_ids(1),
-        uncond_mask=_mask(),
-        guidance_scale=1.0,
-        shared_kwargs={"video_shape": (1, 1, 1), "fps": 24.0, "action_domain_ids": torch.tensor([0])},
-    )
-    torch.testing.assert_close(video_result, torch.full_like(latents, 4.0))
-    torch.testing.assert_close(action_result, torch.full((), 44.0).expand_as(action_result))
-
 
 class TestForwardRouting:
     def _install_forward_stubs(self, pipeline):
@@ -242,12 +178,7 @@ class TestForwardRouting:
 
         def fake_diffuse(**kwargs):
             captured["diffuse_calls"].append(kwargs)
-            outputs = [kwargs["latents"] + len(captured["diffuse_calls"])]
-            if kwargs.get("action_latents") is not None:
-                outputs.append(kwargs["action_latents"] + 3.0)
-            if kwargs.get("sound_latents") is not None:
-                outputs.append(kwargs["sound_latents"] + 2.0)
-            return outputs[0] if len(outputs) == 1 else tuple(outputs)
+            return kwargs["latents"] + len(captured["diffuse_calls"])
 
         pipeline._format_and_tokenize_prompts = fake_format
         pipeline._prepare_latents = fake_prepare
@@ -295,7 +226,7 @@ class TestForwardRouting:
         assert captured["flow_shifts"] == expected["flow"]
         assert captured["scheduler_steps"] == expected["steps"]
 
-    def test_forward_i2v_sound_and_action_routes(self, make_cosmos3_pipeline) -> None:
+    def test_forward_i2v_route(self, make_cosmos3_pipeline) -> None:
         pipeline = make_cosmos3_pipeline()
         captured = self._install_forward_stubs(pipeline)
         image_tensor = torch.zeros(1, 3, 16, 16)
@@ -320,55 +251,11 @@ class TestForwardRouting:
         )
         assert captured["diffuse_calls"][-1]["shared_kwargs"]["noisy_frame_mask"] is velocity_mask
 
-        pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, sound_gen=True, sound_dim=3)
-        sound_latents = torch.zeros(1, 3, 4)
-        pipeline._resolve_sound_target_samples = lambda *args: (20, 2.0, 10)
-        pipeline._prepare_sound_latents = lambda *args: (sound_latents, 4)
-        pipeline._decode_sound_latents = lambda *args: torch.ones(1, 2, 20)
-        output = pipeline.forward(
-            SimpleNamespace(
-                prompts=[{"prompt": "A robot", "modalities": ["video"], "generate_sound": True}],
-                sampling_params=make_sampling_params(num_frames=9, frame_rate=3.0),
-            )
-        )
-        assert captured["diffuse_calls"][-1]["sound_latents"] is sound_latents
-        assert output.output["audio_sample_rate"] == 10
-
-        pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, action_gen=True, action_dim=4)
-        output = pipeline.forward(
-            SimpleNamespace(
-                prompts=[
-                    {
-                        "prompt": "Pick the block.",
-                        "modalities": ["video"],
-                        "additional_information": {"preprocessed_image": image_tensor},
-                    }
-                ],
-                sampling_params=make_sampling_params(
-                    height=16,
-                    width=16,
-                    extra_args={
-                        "action_mode": "policy",
-                        "action_chunk_size": 2,
-                        "raw_action_dim": 2,
-                        "domain_name": "bridge_orig_lerobot",
-                    },
-                ),
-            )
-        )
-        assert captured["diffuse_calls"][-1]["shared_kwargs"]["action_domain_ids"].tolist() == [7]
-        assert output.custom_output["action"].shape == (1, 2, 2)
-
     @pytest.mark.parametrize(
         ("prompt", "sampling_params", "message"),
         [
             (["one", "two"], make_sampling_params(), "single prompt"),
             ([{"prompt": "one", "modalities": ["image", "video"]}], make_sampling_params(), "both image and video"),
-            (
-                [{"prompt": "x", "modalities": ["image"], "generate_sound": True}],
-                make_sampling_params(),
-                "only for video",
-            ),
         ],
     )
     def test_forward_rejects_invalid_public_requests(
@@ -379,7 +266,6 @@ class TestForwardRouting:
         message,
     ) -> None:
         pipeline = make_cosmos3_pipeline()
-        pipeline.transformer = pipeline.transformer.__class__(latent_channel_size=2, sound_gen=True, sound_dim=3)
 
         with pytest.raises(ValueError, match=message):
             pipeline.forward(SimpleNamespace(prompts=prompt, sampling_params=sampling_params))
