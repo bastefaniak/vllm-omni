@@ -356,7 +356,7 @@ class OmniBase(PDDisaggregationMixin):
         """Raise if ``engine_outputs`` carries an error field.
 
         Raises :class:`EngineDeadError` when ``self.errored`` indicates the
-        engine is unrecoverable, otherwise :class:`EngineGenerateError`
+        engine is unrecoverable, otherwise raises :class:`EngineGenerateError`
         (recoverable, single-request failure).
         """
         engine_outputs = result.engine_outputs
