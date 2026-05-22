@@ -31,6 +31,7 @@ from vllm.model_executor.layers.quantization.base_config import (
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention as FrameworkAttention
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
+from vllm_omni.diffusion.layers.norm import RMSNorm
 
 logger = init_logger(__name__)
 
@@ -81,30 +82,6 @@ def _tf_config_get(config: Any, key: str, default: Any) -> Any:
     if hasattr(config, "get"):
         return config.get(key, default)
     return getattr(config, key, default)
-
-
-# ---------------------------------------------------------------------------
-# RMSNorm
-# ---------------------------------------------------------------------------
-class Qwen3VLTextRMSNorm(nn.Module):
-    """RMSNorm compatible with Qwen3-VL / T5LayerNorm."""
-
-    def __init__(
-        self,
-        hidden_size: int,
-        eps: float = 1e-6,
-        dtype: torch.dtype = torch.bfloat16,
-    ) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=dtype))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -395,8 +372,8 @@ class Cosmos3CausalAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
         )
 
-        self.q_norm = Qwen3VLTextRMSNorm(self.head_dim, eps=rms_norm_eps, dtype=dtype)
-        self.k_norm = Qwen3VLTextRMSNorm(self.head_dim, eps=rms_norm_eps, dtype=dtype)
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -509,8 +486,8 @@ class Cosmos3CrossAttention(nn.Module):
             prefix=f"{prefix}.o_proj",
         )
 
-        self.q_norm = Qwen3VLTextRMSNorm(self.head_dim, eps=rms_norm_eps, dtype=dtype)
-        self.k_norm = Qwen3VLTextRMSNorm(self.head_dim, eps=rms_norm_eps, dtype=dtype)
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
 
         self.local_attn = FrameworkAttention(
             num_heads=self.num_heads_local,
@@ -648,8 +625,8 @@ class Cosmos3UndDecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
         )
-        self.input_layernorm = Qwen3VLTextRMSNorm(hidden_size, eps=rms_norm_eps, dtype=dtype)
-        self.post_attention_layernorm = Qwen3VLTextRMSNorm(hidden_size, eps=rms_norm_eps, dtype=dtype)
+        self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
         self.mlp = Cosmos3GatedMLP(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
@@ -707,8 +684,8 @@ class Cosmos3GenDecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.cross_attention",
         )
-        self.input_layernorm = Qwen3VLTextRMSNorm(hidden_size, eps=rms_norm_eps, dtype=dtype)
-        self.post_attention_layernorm = Qwen3VLTextRMSNorm(hidden_size, eps=rms_norm_eps, dtype=dtype)
+        self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
         self.mlp = Cosmos3GatedMLP(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
@@ -802,7 +779,7 @@ class Cosmos3LanguageModel(nn.Module):
                 for i in range(num_hidden_layers)
             ]
         )
-        self.norm = Qwen3VLTextRMSNorm(hidden_size, eps=rms_norm_eps, dtype=dtype)
+        self.norm = RMSNorm(hidden_size, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -976,7 +953,7 @@ class Cosmos3VFMTransformer(nn.Module):
             ]
         )
 
-        self.norm_moe_gen = Qwen3VLTextRMSNorm(self.hidden_size, eps=self.rms_norm_eps, dtype=dtype)
+        self.norm_moe_gen = RMSNorm(self.hidden_size, eps=self.rms_norm_eps)
         self.gen_sp_prepare = Cosmos3GenSPPrepare()
         self.gen_sp_gather = nn.Identity()
 
