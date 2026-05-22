@@ -19,7 +19,6 @@ import numpy as np
 import torch
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.data import GuardrailViolationError
 from vllm_omni.diffusion.models.progress_bar import _is_rank_zero
 
 logger = init_logger(__name__)
@@ -39,7 +38,8 @@ except ImportError:
         def __init__(self, *args, **kwargs):
             raise ValueError(
                 f"You have disabled the safety checker for {self.__class__}. This is in violation of the "
-                "[NVIDIA Open Model License Agreement](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license). "
+                "[NVIDIA Open Model License Agreement]"
+                "(https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license). "
                 f"Please ensure that you are compliant with the license agreement."
             )
 
@@ -62,7 +62,7 @@ def _build_text_guardrail(checker: Any) -> TextGuardrailFn:
     def text_guardrail(prompt: str) -> None:
         if not checker.check_text_safety(prompt):
             # CosmosSafetyChecker logs the specific reason at CRITICAL.
-            raise GuardrailViolationError("Guardrail blocked prompt")
+            raise ValueError("Guardrail blocked prompt")
 
     return text_guardrail
 
