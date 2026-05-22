@@ -1,0 +1,14 @@
+# Cosmos3 single-stage diffusion deploy config.
+#
+# This config is auto-loaded for Diffusers repos whose model_index.json has
+# _class_name: Cosmos3OmniDiffusersPipeline. Pass --deploy-config only for
+# local overrides such as disabling guardrails.
+
+async_chunk: false
+trust_remote_code: true
+
+stages:
+  - stage_id: 0
+    max_num_seqs: 1
+    enforce_eager: true
+    model_class_name: Cosmos3OmniDiffusersPipeline

@@ -14,7 +14,6 @@ from PIL import Image
 from vllm.engine.protocol import EngineClient
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.data import GuardrailViolationError
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoAction,
@@ -180,8 +179,8 @@ class OmniOpenAIServingVideo:
         result = await self._run_generation(prompt, gen_params, reference_id)
         videos = self._extract_video_outputs(result)
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
-        actions = self._extract_action_outputs(result, expected_count=len(videos))
         audio_sample_rate = self._resolve_audio_sample_rate(result)
+        actions = self._extract_action_outputs(result, expected_count=len(videos))
         output_fps = (vp.fps or self._resolve_fps(result) or 24) * self._resolve_video_fps_multiplier(result)
         return VideoGenerationArtifacts(
             videos=videos,
@@ -337,18 +336,12 @@ class OmniOpenAIServingVideo:
         )
 
         result = None
-        try:
-            async for output in engine_client.generate(
-                prompt=prompt,
-                request_id=request_id,
-                sampling_params_list=sampling_params_list,
-            ):
-                result = output
-        except GuardrailViolationError as exc:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST.value,
-                detail=str(exc),
-            ) from exc
+        async for output in engine_client.generate(
+            prompt=prompt,
+            request_id=request_id,
+            sampling_params_list=sampling_params_list,
+        ):
+            result = output
 
         if result is None:
             raise HTTPException(
