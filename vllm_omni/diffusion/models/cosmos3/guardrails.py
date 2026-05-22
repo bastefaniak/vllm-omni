@@ -41,6 +41,7 @@ except ImportError:
                 "[NVIDIA Open Model License Agreement]"
                 "(https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license). "
                 f"Please ensure that you are compliant with the license agreement."
+                f"Please install cosmos-guardrail package to enable safety checks."
             )
 
 
