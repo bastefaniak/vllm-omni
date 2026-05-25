@@ -101,10 +101,21 @@ def test_prompt_formatting_and_checkpoint_key_remap(make_cosmos3_pipeline) -> No
     assert "The video is not 2.0 seconds long" in captured[1]
 
     remaps = {
+        "embed_tokens.weight": "transformer.language_model.embed_tokens.weight",
         "model.embed_tokens.weight": "transformer.language_model.embed_tokens.weight",
-        "model.layers.3.self_attn.q_proj.weight": "transformer.language_model.layers.3.self_attn.q_proj.weight",
-        "model.layers.3.self_attn.q_proj_moe_gen.weight": "transformer.gen_layers.3.cross_attention.q_proj.weight",
-        "lm_head.weight": None,
+        "norm.weight": "transformer.language_model.norm.weight",
+        "norm_moe_gen.weight": "transformer.norm_moe_gen.weight",
+        "proj_in.weight": "transformer.proj_in.weight",
+        "proj_out.bias": "transformer.proj_out.bias",
+        "layers.3.self_attn.to_q.weight": "transformer.language_model.layers.3.self_attn.to_q.weight",
+        "layers.3.self_attn.to_out.weight": "transformer.language_model.layers.3.self_attn.to_out.weight",
+        "layers.3.self_attn.norm_q.weight": "transformer.language_model.layers.3.self_attn.norm_q.weight",
+        "layers.3.self_attn.add_q_proj.weight": "transformer.gen_layers.3.cross_attention.to_q.weight",
+        "layers.3.self_attn.to_add_out.weight": "transformer.gen_layers.3.cross_attention.to_out.weight",
+        "layers.3.self_attn.norm_added_q.weight": "transformer.gen_layers.3.cross_attention.norm_q.weight",
+        "transformer.model.layers.3.self_attn.add_k_proj.weight": (
+            "transformer.gen_layers.3.cross_attention.to_k.weight"
+        ),
     }
     assert {key: Cosmos3OmniDiffusersPipeline._remap_ckpt_key(key) for key in remaps} == remaps
 
