@@ -238,7 +238,7 @@ class Cosmos3OmniDiffusersPipeline(
             )
         self.od_config = od_config
         self.device = get_local_device()
-        self.dtype = getattr(od_config, "dtype", torch.bfloat16)
+        self.dtype = od_config.dtype
 
         model_path = od_config.model
         local_files_only = os.path.exists(model_path)
@@ -254,7 +254,7 @@ class Cosmos3OmniDiffusersPipeline(
         self.vae = DistributedAutoencoderKLWan.from_pretrained(
             model_path,
             subfolder="vae",
-            torch_dtype=torch.bfloat16,
+            torch_dtype=self.dtype,
             local_files_only=local_files_only,
         ).to(self.device)
 
@@ -493,6 +493,10 @@ class Cosmos3OmniDiffusersPipeline(
             modalities = [modalities]
         if "image" in modalities and "video" in modalities:
             raise ValueError("Cosmos3 prompt modalities cannot request both image and video output.")
+
+        accepted_modalities = ["image", "video", "text", "audio"]
+        if any([x not in accepted_modalities for x in modalities]):
+            raise ValueError(f"Incorrect modality value in {modalities}, expected one of {accepted_modalities}.")
         return "image" in modalities
 
     def _set_flow_shift(self, target_shift: float) -> None:

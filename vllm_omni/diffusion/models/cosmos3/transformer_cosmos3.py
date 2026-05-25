@@ -30,6 +30,7 @@ from vllm.model_executor.layers.quantization.base_config import (
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention as FrameworkAttention
+from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
 from vllm_omni.diffusion.layers.norm import RMSNorm
 
@@ -41,19 +42,16 @@ def _get_ulysses_state() -> tuple[int, int, dist.ProcessGroup | None]:
 
     Returns (1, 0, None) when sequence parallelism is not active.
     """
-    try:
-        from vllm_omni.diffusion.distributed.parallel_state import (
-            get_sp_group,
-            get_ulysses_parallel_rank,
-            get_ulysses_parallel_world_size,
-        )
+    from vllm_omni.diffusion.distributed.parallel_state import (
+        get_sp_group,
+        get_ulysses_parallel_rank,
+        get_ulysses_parallel_world_size,
+    )
 
-        size = get_ulysses_parallel_world_size()
-        if size <= 1:
-            return 1, 0, None
-        return size, get_ulysses_parallel_rank(), get_sp_group().ulysses_group
-    except Exception:
+    size = get_ulysses_parallel_world_size()
+    if size <= 1:
         return 1, 0, None
+    return size, get_ulysses_parallel_rank(), get_sp_group().ulysses_group
 
 
 def _is_sp_active() -> bool:
@@ -321,7 +319,6 @@ class Cosmos3CausalAttention(nn.Module):
         num_key_value_heads: int,
         head_dim: int,
         rms_norm_eps: float,
-        dtype: torch.dtype = torch.bfloat16,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
@@ -435,7 +432,6 @@ class Cosmos3CrossAttention(nn.Module):
         num_key_value_heads: int,
         head_dim: int,
         rms_norm_eps: float,
-        dtype: torch.dtype = torch.bfloat16,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
@@ -610,7 +606,6 @@ class Cosmos3UndDecoderLayer(nn.Module):
         num_key_value_heads: int,
         head_dim: int,
         rms_norm_eps: float,
-        dtype: torch.dtype = torch.bfloat16,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
@@ -621,7 +616,6 @@ class Cosmos3UndDecoderLayer(nn.Module):
             num_key_value_heads=num_key_value_heads,
             head_dim=head_dim,
             rms_norm_eps=rms_norm_eps,
-            dtype=dtype,
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
         )
@@ -668,7 +662,6 @@ class Cosmos3GenDecoderLayer(nn.Module):
         num_key_value_heads: int,
         head_dim: int,
         rms_norm_eps: float,
-        dtype: torch.dtype = torch.bfloat16,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
@@ -680,7 +673,6 @@ class Cosmos3GenDecoderLayer(nn.Module):
             num_key_value_heads=num_key_value_heads,
             head_dim=head_dim,
             rms_norm_eps=rms_norm_eps,
-            dtype=dtype,
             quant_config=quant_config,
             prefix=f"{prefix}.cross_attention",
         )
@@ -752,7 +744,6 @@ class Cosmos3LanguageModel(nn.Module):
         rms_norm_eps: float,
         rope_theta: float,
         mrope_section: list[int],
-        dtype: torch.dtype = torch.bfloat16,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ) -> None:
@@ -772,7 +763,6 @@ class Cosmos3LanguageModel(nn.Module):
                     num_key_value_heads=num_key_value_heads,
                     head_dim=head_dim,
                     rms_norm_eps=rms_norm_eps,
-                    dtype=dtype,
                     quant_config=quant_config,
                     prefix=f"{prefix}.layers.{i}",
                 )
@@ -875,12 +865,12 @@ class Cosmos3VFMTransformer(nn.Module):
 
     def __init__(
         self,
-        od_config: object | None = None,
+        od_config: OmniDiffusionConfig,
         *,
         temporal_compression_factor: int | None = None,
     ) -> None:
         super().__init__()
-        model_config = getattr(od_config, "tf_model_config", None) if od_config else None
+        model_config = od_config.tf_model_config
         self._validate_supported_config(model_config)
         rope_scaling = _tf_config_get(model_config, "rope_scaling", {}) or {}
 
@@ -911,7 +901,7 @@ class Cosmos3VFMTransformer(nn.Module):
         )
         self.patch_latent_dim = (self.latent_patch_size**2) * self.latent_channel_size
 
-        dtype = getattr(od_config, "dtype", torch.bfloat16) if od_config else torch.bfloat16
+        dtype = od_config.dtype
         quant_config = getattr(od_config, "quantization_config", None) if od_config else None
 
         self.language_model = Cosmos3LanguageModel(
@@ -925,7 +915,6 @@ class Cosmos3VFMTransformer(nn.Module):
             rms_norm_eps=self.rms_norm_eps,
             rope_theta=self.rope_theta,
             mrope_section=self.mrope_section,
-            dtype=dtype,
             quant_config=quant_config,
             prefix="language_model",
         )
@@ -933,7 +922,7 @@ class Cosmos3VFMTransformer(nn.Module):
         # Video projection layers are small; not worth quantizing.
         self.proj_in = nn.Linear(self.patch_latent_dim, self.hidden_size)
         self.proj_out = nn.Linear(self.hidden_size, self.patch_latent_dim)
-        self.time_embedder = TimestepEmbedder(self.hidden_size, target_dtype=torch.bfloat16)
+        self.time_embedder = TimestepEmbedder(self.hidden_size, target_dtype=dtype)
 
         self.gen_layers = nn.ModuleList(
             [
@@ -945,7 +934,6 @@ class Cosmos3VFMTransformer(nn.Module):
                     num_key_value_heads=self.num_key_value_heads,
                     head_dim=self.head_dim,
                     rms_norm_eps=self.rms_norm_eps,
-                    dtype=dtype,
                     quant_config=quant_config,
                     prefix=f"gen_layers.{i}",
                 )
