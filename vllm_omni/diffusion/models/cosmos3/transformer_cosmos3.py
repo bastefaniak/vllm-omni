@@ -493,45 +493,45 @@ class Cosmos3CausalAttention(nn.Module):
         self.num_heads_local = self.num_heads // tp_size
         self.num_kv_heads_local = self.num_kv_heads // tp_size
 
-        self.q_proj = ColumnParallelLinear(
+        self.to_q = ColumnParallelLinear(
             hidden_size,
             self.num_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.q_proj",
+            prefix=f"{prefix}.to_q",
         )
-        self.k_proj = ColumnParallelLinear(
+        self.to_k = ColumnParallelLinear(
             hidden_size,
             self.num_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.k_proj",
+            prefix=f"{prefix}.to_k",
         )
-        self.v_proj = ColumnParallelLinear(
+        self.to_v = ColumnParallelLinear(
             hidden_size,
             self.num_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.v_proj",
+            prefix=f"{prefix}.to_v",
         )
-        self.o_proj = RowParallelLinear(
+        self.to_out = RowParallelLinear(
             self.num_heads * self.head_dim,
             hidden_size,
             bias=False,
             input_is_parallel=True,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.o_proj",
+            prefix=f"{prefix}.to_out",
         )
 
-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.norm_q = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.norm_k = RMSNorm(self.head_dim, eps=rms_norm_eps)
 
     def forward(
         self,
@@ -542,13 +542,13 @@ class Cosmos3CausalAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, S, _ = hidden_states.shape
 
-        q = self.q_proj(hidden_states).view(B, S, self.num_heads_local, self.head_dim)
-        k = self.k_proj(hidden_states).view(B, S, self.num_kv_heads_local, self.head_dim)
-        v = self.v_proj(hidden_states).view(B, S, self.num_kv_heads_local, self.head_dim)
+        q = self.to_q(hidden_states).view(B, S, self.num_heads_local, self.head_dim)
+        k = self.to_k(hidden_states).view(B, S, self.num_kv_heads_local, self.head_dim)
+        v = self.to_v(hidden_states).view(B, S, self.num_kv_heads_local, self.head_dim)
 
         # Per-head QK norm
-        q = F.rms_norm(q, (q.shape[-1],), self.q_norm.weight, self.q_norm.variance_epsilon)
-        k = F.rms_norm(k, (k.shape[-1],), self.k_norm.weight, self.k_norm.variance_epsilon)
+        q = F.rms_norm(q, (q.shape[-1],), self.norm_q.weight, self.norm_q.variance_epsilon)
+        k = F.rms_norm(k, (k.shape[-1],), self.norm_k.weight, self.norm_k.variance_epsilon)
 
         # Qwen3-style RoPE
         q, k = _apply_rotary_pos_emb(q, k, freqs_cos, freqs_sin)
@@ -567,7 +567,7 @@ class Cosmos3CausalAttention(nn.Module):
             out = F.scaled_dot_product_attention(q_t, k_t, v_t, is_causal=True, enable_gqa=True)
 
         out = out.transpose(1, 2).contiguous().view(B, S, -1)
-        return self.o_proj(out), k, v
+        return self.to_out(out), k, v
 
 
 class Cosmos3CrossAttention(nn.Module):
@@ -607,45 +607,45 @@ class Cosmos3CrossAttention(nn.Module):
         self.num_heads_local = self.num_heads // tp_size
         self.num_kv_heads_local = self.num_kv_heads // tp_size
 
-        self.q_proj = ColumnParallelLinear(
+        self.to_q = ColumnParallelLinear(
             hidden_size,
             self.num_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.q_proj",
+            prefix=f"{prefix}.to_q",
         )
-        self.k_proj = ColumnParallelLinear(
+        self.to_k = ColumnParallelLinear(
             hidden_size,
             self.num_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.k_proj",
+            prefix=f"{prefix}.to_k",
         )
-        self.v_proj = ColumnParallelLinear(
+        self.to_v = ColumnParallelLinear(
             hidden_size,
             self.num_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.v_proj",
+            prefix=f"{prefix}.to_v",
         )
-        self.o_proj = RowParallelLinear(
+        self.to_out = RowParallelLinear(
             self.num_heads * self.head_dim,
             hidden_size,
             bias=False,
             input_is_parallel=True,
             return_bias=False,
             quant_config=quant_config,
-            prefix=f"{prefix}.o_proj",
+            prefix=f"{prefix}.to_out",
         )
 
-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.norm_q = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.norm_k = RMSNorm(self.head_dim, eps=rms_norm_eps)
 
         self.local_attn = FrameworkAttention(
             num_heads=self.num_heads_local,
@@ -734,13 +734,13 @@ class Cosmos3CrossAttention(nn.Module):
         """
         B, S_gen, _ = hidden_states.shape
 
-        q = self.q_proj(hidden_states).view(B, S_gen, self.num_heads_local, self.head_dim)
-        k = self.k_proj(hidden_states).view(B, S_gen, self.num_kv_heads_local, self.head_dim)
-        v = self.v_proj(hidden_states).view(B, S_gen, self.num_kv_heads_local, self.head_dim)
+        q = self.to_q(hidden_states).view(B, S_gen, self.num_heads_local, self.head_dim)
+        k = self.to_k(hidden_states).view(B, S_gen, self.num_kv_heads_local, self.head_dim)
+        v = self.to_v(hidden_states).view(B, S_gen, self.num_kv_heads_local, self.head_dim)
 
         # Per-head QK norm
-        q = F.rms_norm(q, (q.shape[-1],), self.q_norm.weight, self.q_norm.variance_epsilon)
-        k = F.rms_norm(k, (k.shape[-1],), self.k_norm.weight, self.k_norm.variance_epsilon)
+        q = F.rms_norm(q, (q.shape[-1],), self.norm_q.weight, self.norm_q.variance_epsilon)
+        k = F.rms_norm(k, (k.shape[-1],), self.norm_k.weight, self.norm_k.variance_epsilon)
 
         # Qwen3-style RoPE
         q, k = _apply_rotary_pos_emb(q, k, freqs_cos, freqs_sin)
@@ -750,7 +750,7 @@ class Cosmos3CrossAttention(nn.Module):
         else:
             out = self._forward_local(q, k, v, k_und, v_und)
 
-        return self.o_proj(out)
+        return self.to_out(out)
 
 
 # ---------------------------------------------------------------------------
@@ -1111,9 +1111,6 @@ class Cosmos3VFMTransformer(nn.Module):
             prefix="language_model",
         )
 
-        # vae2llm / llm2vae are small projection layers; not worth quantizing.
-        self.vae2llm = nn.Linear(self.patch_latent_dim, self.hidden_size)
-        self.llm2vae = nn.Linear(self.hidden_size, self.patch_latent_dim)
         if self.action_gen:
             self.action2llm = DomainAwareLinear(
                 self.action_dim,
@@ -1133,6 +1130,9 @@ class Cosmos3VFMTransformer(nn.Module):
             self.llm2sound = nn.Linear(self.hidden_size, self.sound_dim)
             self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
+        # Video projection layers are small; not worth quantizing.
+        self.proj_in = nn.Linear(self.patch_latent_dim, self.hidden_size)
+        self.proj_out = nn.Linear(self.hidden_size, self.patch_latent_dim)
         self.time_embedder = TimestepEmbedder(self.hidden_size, target_dtype=torch.bfloat16)
 
         self.gen_layers = nn.ModuleList(
@@ -1434,7 +1434,7 @@ class Cosmos3VFMTransformer(nn.Module):
         ulysses_size, _, _ = _get_ulysses_state()
 
         # Patchify latents and project to hidden space
-        hidden_video = self.vae2llm(self.patchify(hidden_states, t, h, w))
+        hidden_video = self.proj_in(self.patchify(hidden_states, t, h, w))
         s_video = hidden_video.shape[1]
         s_action = 0
         hidden_action = None
@@ -1571,7 +1571,7 @@ class Cosmos3VFMTransformer(nn.Module):
         # Final norm and project back to latent space
         hidden_gen = self.norm_moe_gen(hidden_gen)
         if not has_action and not has_sound:
-            return self.unpatchify(self.llm2vae(hidden_gen), t, h, w)
+            return self.unpatchify(self.proj_out(hidden_gen), t, h, w)
 
         split_sizes = [s_video]
         if has_action:
@@ -1580,7 +1580,7 @@ class Cosmos3VFMTransformer(nn.Module):
             split_sizes.append(s_sound)
         split_hidden = hidden_gen.split(split_sizes, dim=1)
         hidden_video = split_hidden[0]
-        video_pred = self.unpatchify(self.llm2vae(hidden_video), t, h, w)
+        video_pred = self.unpatchify(self.proj_out(hidden_video), t, h, w)
         outputs: list[torch.Tensor] = [video_pred]
         split_idx = 1
         if has_action:
