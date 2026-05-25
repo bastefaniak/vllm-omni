@@ -321,10 +321,12 @@ class Cosmos3OmniDiffusersPipeline(
         """Remap a Diffusers transformer key to the model parameter namespace.
 
         Checkpoint keys arrive with a synthetic ``transformer.`` prefix from
-        ``weights_sources``.  The source checkpoint itself uses the Diffusers
-        transformer namespace: top-level projections plus ``model.*`` for the
-        Qwen3-VL backbone.  UND and GEN components share each layer in the
-        source and are split into separate module lists here.
+        ``weights_sources``.  The source checkpoint itself uses the prefixless
+        Diffusers transformer namespace: top-level projections plus Qwen3-VL
+        backbone keys.  UND and GEN components share each layer in the source
+        and are split into separate module lists here.  Some sources wrap the
+        transformer namespace under ``model.``; that wrapper is structural and
+        is stripped before applying the Cosmos3 leaf-name remap.
 
         Returns the remapped name under ``transformer.``, or None to skip.
         """
@@ -332,12 +334,14 @@ class Cosmos3OmniDiffusersPipeline(
         # Strip the weights_sources prefix
         if k.startswith("transformer."):
             k = k[len("transformer.") :]
+        if k.startswith("model."):
+            k = k[len("model.") :]
 
         # Top-level generation components.
         if k.startswith(
             (
-                "vae2llm.",
-                "llm2vae.",
+                "proj_in.",
+                "proj_out.",
                 "time_embedder.",
             )
         ):
@@ -347,19 +351,15 @@ class Cosmos3OmniDiffusersPipeline(
         if k.startswith("lm_head."):
             return None
 
-        # embed_tokens / norm → language_model.*
-        if k.startswith("model.embed_tokens."):
-            return f"transformer.language_model.{k[len('model.') :]}"
-        if k.startswith("model.norm."):
-            return f"transformer.language_model.{k[len('model.') :]}"
+        # embed_tokens / norm -> language_model.*
+        if k.startswith("embed_tokens."):
+            return f"transformer.language_model.{k}"
+        if k.startswith("norm."):
+            return f"transformer.language_model.{k}"
 
-        # norm_moe_gen → top level
-        if k.startswith("model.norm_moe_gen."):
-            return f"transformer.{k[len('model.') :]}"
-
-        if not k.startswith("model.layers."):
-            return None
-        k = k[len("model.") :]
+        # norm_moe_gen -> top level
+        if k.startswith("norm_moe_gen."):
+            return f"transformer.{k}"
 
         if not k.startswith("layers."):
             return None
@@ -375,19 +375,19 @@ class Cosmos3OmniDiffusersPipeline(
 
         _LAYER_MAP = {
             # UND attention
-            "self_attn.q_proj.": f"{und_lp}.self_attn.q_proj.",
-            "self_attn.k_proj.": f"{und_lp}.self_attn.k_proj.",
-            "self_attn.v_proj.": f"{und_lp}.self_attn.v_proj.",
-            "self_attn.o_proj.": f"{und_lp}.self_attn.o_proj.",
-            "self_attn.q_norm.": f"{und_lp}.self_attn.q_norm.",
-            "self_attn.k_norm.": f"{und_lp}.self_attn.k_norm.",
+            "self_attn.to_q.": f"{und_lp}.self_attn.to_q.",
+            "self_attn.to_k.": f"{und_lp}.self_attn.to_k.",
+            "self_attn.to_v.": f"{und_lp}.self_attn.to_v.",
+            "self_attn.to_out.": f"{und_lp}.self_attn.to_out.",
+            "self_attn.norm_q.": f"{und_lp}.self_attn.norm_q.",
+            "self_attn.norm_k.": f"{und_lp}.self_attn.norm_k.",
             # GEN attention
-            "self_attn.q_proj_moe_gen.": f"{gen_lp}.cross_attention.q_proj.",
-            "self_attn.k_proj_moe_gen.": f"{gen_lp}.cross_attention.k_proj.",
-            "self_attn.v_proj_moe_gen.": f"{gen_lp}.cross_attention.v_proj.",
-            "self_attn.o_proj_moe_gen.": f"{gen_lp}.cross_attention.o_proj.",
-            "self_attn.q_norm_moe_gen.": f"{gen_lp}.cross_attention.q_norm.",
-            "self_attn.k_norm_moe_gen.": f"{gen_lp}.cross_attention.k_norm.",
+            "self_attn.add_q_proj.": f"{gen_lp}.cross_attention.to_q.",
+            "self_attn.add_k_proj.": f"{gen_lp}.cross_attention.to_k.",
+            "self_attn.add_v_proj.": f"{gen_lp}.cross_attention.to_v.",
+            "self_attn.to_add_out.": f"{gen_lp}.cross_attention.to_out.",
+            "self_attn.norm_added_q.": f"{gen_lp}.cross_attention.norm_q.",
+            "self_attn.norm_added_k.": f"{gen_lp}.cross_attention.norm_k.",
             # Norms
             "input_layernorm.": f"{und_lp}.input_layernorm.",
             "post_attention_layernorm.": f"{und_lp}.post_attention_layernorm.",
