@@ -64,8 +64,8 @@ def test_cosmos3_cache_dit_wraps_gen_layers(mock_cache_dit, mock_block_adapter):
     assert adapter_kwargs["blocks"] == [gen_layers]
     assert adapter_kwargs["has_separate_cfg"] is True
     assert adapter_kwargs["check_forward_pattern"] is False
-    
-    
+
+
 # This test is skipped on ROCm since rocm_unquantized_gemm doesn't support CPU backend
 @pytest.mark.skipif(
     current_omni_platform.is_rocm(),
