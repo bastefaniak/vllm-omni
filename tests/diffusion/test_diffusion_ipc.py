@@ -1,10 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import contextlib
+
+import pytest
 import torch
 
 from vllm_omni.diffusion.data import DiffusionOutput
-from vllm_omni.diffusion.ipc import pack_diffusion_output_shm, unpack_diffusion_output_shm
+from vllm_omni.diffusion.ipc import (
+    _SHM_TENSOR_THRESHOLD,
+    _pack_value_if_large,
+    _unpack_if_shm_handle,
+    pack_diffusion_output_shm,
+    unpack_diffusion_output_shm,
+)
+
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
+
+def _large_numel(dtype: torch.dtype) -> int:
+    return (_SHM_TENSOR_THRESHOLD // torch.empty((), dtype=dtype).element_size()) + 1
+
+
+def _cleanup_shm_handle(value: object) -> None:
+    if isinstance(value, dict) and value.get("__tensor_shm__"):
+        with contextlib.suppress(FileNotFoundError):
+            _unpack_if_shm_handle(value)
 
 
 def test_diffusion_output_dict_tensors_round_trip_through_shm() -> None:
@@ -23,3 +44,100 @@ def test_diffusion_output_dict_tensors_round_trip_through_shm() -> None:
     torch.testing.assert_close(output.output["image"], image)
     torch.testing.assert_close(output.output["video"], video)
     assert output.output["metadata"] == {"keep": "inline"}
+
+
+def test_pack_value_keeps_tensor_at_threshold_inline() -> None:
+    tensor = torch.arange(
+        _SHM_TENSOR_THRESHOLD // torch.empty((), dtype=torch.float32).element_size(),
+        dtype=torch.float32,
+    )
+
+    packed = _pack_value_if_large(tensor)
+
+    assert packed is tensor
+
+
+def test_pack_value_packs_large_tensor_and_round_trips() -> None:
+    tensor = torch.arange(_large_numel(torch.float32), dtype=torch.float32)
+    packed = _pack_value_if_large(tensor)
+
+    try:
+        assert isinstance(packed, dict)
+        assert packed["__tensor_shm__"] is True
+        assert packed["shape"] == [tensor.numel()]
+        assert packed["torch_dtype"] == "torch.float32"
+
+        unpacked = _unpack_if_shm_handle(packed)
+        assert isinstance(unpacked, torch.Tensor)
+        torch.testing.assert_close(unpacked, tensor)
+    finally:
+        _cleanup_shm_handle(packed)
+
+
+def test_pack_value_recurses_nested_dicts_without_mutating_other_values() -> None:
+    large = torch.arange(_large_numel(torch.float32), dtype=torch.float32)
+    small = torch.arange(8, dtype=torch.float32)
+    list_tensor = torch.arange(_large_numel(torch.float32), dtype=torch.float32)
+    payload = {
+        "media": {
+            "large": large,
+            "small": small,
+        },
+        "list_value": [list_tensor],
+        "metadata": {"prompt": "keep inline"},
+    }
+
+    packed = _pack_value_if_large(payload)
+
+    try:
+        assert packed is not payload
+        assert packed["media"] is not payload["media"]
+        assert packed["media"]["large"]["__tensor_shm__"] is True
+        assert packed["media"]["small"] is small
+        assert packed["list_value"] is payload["list_value"]
+        assert packed["list_value"][0] is list_tensor
+        assert packed["metadata"] == {"prompt": "keep inline"}
+
+        unpacked_large = _unpack_if_shm_handle(packed["media"]["large"])
+        assert isinstance(unpacked_large, torch.Tensor)
+        torch.testing.assert_close(unpacked_large, large)
+    finally:
+        handle = packed.get("media", {}).get("large") if isinstance(packed, dict) else None
+        _cleanup_shm_handle(handle)
+
+
+def test_pack_value_preserves_dtype_shape_and_values_for_bfloat16() -> None:
+    tensor = torch.arange(_large_numel(torch.bfloat16), dtype=torch.float32).to(torch.bfloat16).reshape(1, -1)
+    packed = _pack_value_if_large(tensor)
+
+    try:
+        assert isinstance(packed, dict)
+        assert packed["__tensor_shm__"] is True
+        assert packed["shape"] == list(tensor.shape)
+        assert packed["torch_dtype"] == "torch.bfloat16"
+        assert packed["numpy_dtype"] == "float32"
+
+        unpacked = _unpack_if_shm_handle(packed)
+        assert isinstance(unpacked, torch.Tensor)
+        assert unpacked.dtype == torch.bfloat16
+        torch.testing.assert_close(unpacked, tensor)
+    finally:
+        _cleanup_shm_handle(packed)
+
+
+def test_pack_value_packs_non_contiguous_large_tensor_values() -> None:
+    tensor = torch.arange(_large_numel(torch.float32) * 2, dtype=torch.float32).reshape(-1, 2)[:, 0]
+    assert not tensor.is_contiguous()
+
+    packed = _pack_value_if_large(tensor)
+
+    try:
+        assert isinstance(packed, dict)
+        assert packed["__tensor_shm__"] is True
+        assert packed["shape"] == list(tensor.shape)
+
+        unpacked = _unpack_if_shm_handle(packed)
+        assert isinstance(unpacked, torch.Tensor)
+        torch.testing.assert_close(unpacked, tensor)
+    finally:
+        _cleanup_shm_handle(packed)
