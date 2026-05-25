@@ -483,15 +483,15 @@ class Cosmos3OmniDiffusersPipeline(
                 "proj_in.",
                 "proj_out.",
                 "time_embedder.",
-                "sound2llm.",
-                "llm2sound.",
-                "action2llm.",
-                "llm2action.",
+                "audio_proj_in.",
+                "audio_proj_out.",
+                "action_proj_in.",
+                "action_proj_out.",
             )
         ):
             return f"transformer.{k}"
-        if k in ("sound_modality_embed", "sound_modality_embed.weight"):
-            return "transformer.sound_modality_embed"
+        if k in ("audio_modality_embed", "audio_modality_embed.weight"):
+            return "transformer.audio_modality_embed"
         if k in ("action_modality_embed", "action_modality_embed.weight"):
             return "transformer.action_modality_embed"
         if k.startswith("action_pos_embed."):
@@ -591,7 +591,7 @@ class Cosmos3OmniDiffusersPipeline(
         self.transformer.eval()
         self._loaded_weight_names = set(loaded)
         if getattr(self.transformer, "sound_gen", False):
-            sound_markers = ("sound2llm.", "llm2sound.", "sound_modality_embed")
+            sound_markers = ("audio_proj_in.", "audio_proj_out.", "audio_modality_embed")
             missing = [marker.rstrip(".") for marker in sound_markers if not any(marker in name for name in loaded)]
             if missing:
                 raise ValueError(
@@ -600,7 +600,7 @@ class Cosmos3OmniDiffusersPipeline(
                     "Use a sound-capable transformer checkpoint."
                 )
         if getattr(self.transformer, "action_gen", False):
-            action_markers = ("action2llm.", "llm2action.", "action_modality_embed")
+            action_markers = ("action_proj_in.", "action_proj_out.", "action_modality_embed")
             missing = [marker.rstrip(".") for marker in action_markers if not any(marker in name for name in loaded)]
             if missing:
                 raise ValueError(

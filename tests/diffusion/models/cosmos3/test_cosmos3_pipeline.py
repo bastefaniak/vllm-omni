@@ -133,7 +133,9 @@ def test_prompt_formatting_and_checkpoint_key_remap(make_cosmos3_pipeline) -> No
         "transformer.model.layers.3.self_attn.add_k_proj.weight": (
             "transformer.gen_layers.3.cross_attention.to_k.weight"
         ),
-        "sound2llm.weight": "transformer.sound2llm.weight",
+        "audio_proj_in.weight": "transformer.audio_proj_in.weight",
+        "audio_modality_embed.weight": "transformer.audio_modality_embed",
+        "action_proj_in.fc.weight": "transformer.action_proj_in.fc.weight",
         "action_modality_embed.weight": "transformer.action_modality_embed",
         "lm_head.weight": None,
     }

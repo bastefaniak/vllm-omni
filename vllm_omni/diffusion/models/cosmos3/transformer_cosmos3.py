@@ -1112,13 +1112,13 @@ class Cosmos3VFMTransformer(nn.Module):
         )
 
         if self.action_gen:
-            self.action2llm = DomainAwareLinear(
+            self.action_proj_in = DomainAwareLinear(
                 self.action_dim,
                 self.hidden_size,
                 self.num_embodiment_domains,
                 dtype=dtype,
             )
-            self.llm2action = DomainAwareLinear(
+            self.action_proj_out = DomainAwareLinear(
                 self.hidden_size,
                 self.action_dim,
                 self.num_embodiment_domains,
@@ -1126,9 +1126,9 @@ class Cosmos3VFMTransformer(nn.Module):
             )
             self.action_modality_embed = nn.Parameter(torch.zeros(self.hidden_size, dtype=dtype))
         if self.sound_gen:
-            self.sound2llm = nn.Linear(self.sound_dim, self.hidden_size)
-            self.llm2sound = nn.Linear(self.hidden_size, self.sound_dim)
-            self.sound_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
+            self.audio_proj_in = nn.Linear(self.sound_dim, self.hidden_size)
+            self.audio_proj_out = nn.Linear(self.hidden_size, self.sound_dim)
+            self.audio_modality_embed = nn.Parameter(torch.zeros(self.hidden_size))
 
         # Video projection layers are small; not worth quantizing.
         self.proj_in = nn.Linear(self.patch_latent_dim, self.hidden_size)
@@ -1448,7 +1448,7 @@ class Cosmos3VFMTransformer(nn.Module):
                 )
             if action_domain_ids is None:
                 action_domain_ids = torch.zeros(action_latents.shape[0], dtype=torch.long, device=action_latents.device)
-            hidden_action = self.action2llm(self.pack_action(action_latents), action_domain_ids)
+            hidden_action = self.action_proj_in(self.pack_action(action_latents), action_domain_ids)
             hidden_action = hidden_action + self.action_modality_embed.to(hidden_action.dtype)
             s_action = hidden_action.shape[1]
         if sound_latents is not None:
@@ -1457,8 +1457,8 @@ class Cosmos3VFMTransformer(nn.Module):
                     "Cosmos3 sound and video batch sizes must match: "
                     f"video={hidden_states.shape[0]}, sound={sound_latents.shape[0]}."
                 )
-            hidden_sound = self.sound2llm(self.pack_sound(sound_latents))
-            hidden_sound = hidden_sound + self.sound_modality_embed.to(hidden_sound.dtype)
+            hidden_sound = self.audio_proj_in(self.pack_sound(sound_latents))
+            hidden_sound = hidden_sound + self.audio_modality_embed.to(hidden_sound.dtype)
             s_sound = hidden_sound.shape[1]
 
         # Timestep embedding (fp32 for precision).
@@ -1587,10 +1587,10 @@ class Cosmos3VFMTransformer(nn.Module):
             hidden_action = split_hidden[split_idx]
             split_idx += 1
             assert action_domain_ids is not None
-            outputs.append(self.unpack_action(self.llm2action(hidden_action, action_domain_ids)))
+            outputs.append(self.unpack_action(self.action_proj_out(hidden_action, action_domain_ids)))
         if has_sound:
             hidden_sound = split_hidden[split_idx]
-            outputs.append(self.unpack_sound(self.llm2sound(hidden_sound)))
+            outputs.append(self.unpack_sound(self.audio_proj_out(hidden_sound)))
         return tuple(outputs)
 
     def post_load_weights(self) -> None:
