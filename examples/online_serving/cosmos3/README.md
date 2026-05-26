@@ -24,12 +24,12 @@ Cosmos3 ships with safety guardrails that check prompts and apply generated-outp
 
 ### Server-wide (skip loading guardrail models entirely)
 
-Start the server with `--stage-configs-path cosmos3_no_guardrails.yaml`, which sets `model_config.guardrails: false` on the diffusion stage so the guardrail models are never loaded:
+Start the server with `--deploy-config cosmos3_no_guardrails.yaml`, which sets `model_config.guardrails: false` on the diffusion stage so the guardrail models are never loaded:
 
 ```bash
 vllm serve nvidia/Cosmos3-Nano --omni \
   --model-class-name Cosmos3OmniDiffusersPipeline \
-  --stage-configs-path examples/online_serving/cosmos3/cosmos3_no_guardrails.yaml \
+  --deploy-config examples/online_serving/cosmos3/cosmos3_no_guardrails.yaml \
   --port 8091
 ```
 
