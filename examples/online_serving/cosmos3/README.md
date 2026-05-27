@@ -1,6 +1,6 @@
 # Cosmos3
 
-This example shows Cosmos3 online serving with `Cosmos3OmniDiffusersPipeline`.
+This example shows Cosmos3 online serving with `Cosmos3OmniDiffusersPipeline` for text-to-image, text-to-video, image-to-video, video-to-video, video-with-sound, and action generation.
 
 The server defaults to the `nvidia/Cosmos3-Nano` Hugging Face repo. Override the checkpoint by exporting `MODEL` or `COSMOS3_MODEL` to a local Diffusers-format checkpoint.
 
@@ -13,10 +13,16 @@ bash run_server.sh
 
 - `MODEL`: checkpoint path or Hugging Face repo, defaults to `nvidia/Cosmos3-Nano` (or `COSMOS3_MODEL` if set)
 - `PORT`: server port, defaults to `8091`
+- `HOST`: optional bind host
+- `MODEL_CLASS_NAME`: diffusion pipeline class, defaults to `Cosmos3OmniDiffusersPipeline`
+- `SERVED_MODEL_NAME`: optional OpenAI model name alias
 - `CACHE_BACKEND`: set to `cache_dit` to enable Cache-DiT
+- `ENABLE_CACHE_DIT_SUMMARY`: set to `1` to log Cache-DiT summaries
 - `ENABLE_LAYERWISE_OFFLOAD`: set to `1` to enable layerwise offload
-- `CFG_PARALLEL_SIZE`, `TENSOR_PARALLEL_SIZE`, `ULYSSES_DEGREE`, `USE_HSDP`: parallel execution controls
+- `CFG_PARALLEL_SIZE`, `TENSOR_PARALLEL_SIZE`, `ULYSSES_DEGREE`, `RING_DEGREE`, `VAE_PATCH_PARALLEL_SIZE`, `USE_HSDP`: parallel execution controls
+- `VAE_USE_SLICING`, `VAE_USE_TILING`, `HSDP_SHARD_SIZE`, `HSDP_REPLICATE_SIZE`, `ENFORCE_EAGER`: optional runtime controls
 - `ALLOWED_LOCAL_MEDIA_PATH`: local media access path, defaults to `/`
+- `DEPLOY_CONFIG`, `DEFAULT_SAMPLING_PARAMS`: optional server config overrides
 
 ## Disabling guardrails
 
@@ -76,6 +82,20 @@ The companion image (`robot_153.jpg`) is auto-downloaded on first run. To use yo
 IMAGE_PATH=/path/to/your.jpg bash run_curl_i2v.sh
 ```
 
+## Video-to-Video
+
+The companion video (`robot_pouring.mp4`) is auto-downloaded on first run. The script uploads it through `input_reference` and sends `condition_frame_indexes_vision` / `condition_video_keep` through `extra_params`, so the server only decodes the source frames needed for V2V conditioning.
+
+```bash
+bash run_curl_v2v.sh
+```
+
+To use your own source video:
+
+```bash
+VIDEO_PATH=/path/to/source.mp4 bash run_curl_v2v.sh
+```
+
 ## Video With Sound
 
 ```bash
@@ -125,17 +145,7 @@ SCENE_INDEX=1 bash run_curl_action_forward_dynamics_camera.sh
 
 ## Action — Inverse Dynamics
 
-> **Known limitation:** the online `/v1/videos` endpoint accepts image bytes only via the `input_reference` form field. Inverse-dynamics needs the full source video, so the scripts below will currently fail at upload time. They are shipped pre-wired so they begin working unchanged once the server gains video upload support. In the meantime, run inverse-dynamics through the offline path:
->
-> ```bash
-> cd ../../offline_inference/cosmos3
-> python end2end.py --task action_inverse_dynamics \
->   --input-json inputs/action_inverse_dynamics_robot.json \
->   --output cosmos3_inverse_dynamics_robot.mp4 \
->   --action-output cosmos3_inverse_dynamics_robot_action.json
-> ```
-
-Curl variants (kept for forward compatibility):
+Inverse-dynamics scripts upload the full source video through `input_reference`, poll the async `/v1/videos` job, and save both the generated video and returned action JSON.
 
 ```bash
 bash run_curl_action_inverse_dynamics_robot.sh
@@ -152,6 +162,7 @@ Every curl script accepts a small set of env overrides:
 - `INPUT_JSON` / `INPUT_JSONL` (camera) / `INPUTS_DIR`: alternate source for prompt and sampling parameters
 - `IMAGE_PATH` / `VIDEO_PATH`: pre-existing vision asset (skip auto-download / frame-extraction)
 - `ACTION_PATH` (forward-dynamics): pre-existing action JSON on the server's filesystem
+- `CONDITION_FRAME_INDEXES_VISION`, `CONDITION_VIDEO_KEEP` (V2V): override source-video conditioning controls
 - `POLL_INTERVAL` (async scripts): seconds between status checks
 
 Async scripts use `POST /v1/videos` so they can download the MP4 once the job completes and save the action JSON returned in the status response.
