@@ -1,13 +1,8 @@
 #!/bin/bash
 # Cosmos3 inverse-dynamics example (autonomous vehicle, video input).
 #
-# KNOWN LIMITATION: as of writing, the online `/v1/videos` endpoint accepts
-# image bytes only via the `input_reference` form field. Inverse-dynamics
-# needs the full source video, so this script will currently fail at upload
-# time. The offline path (`examples/offline_inference/cosmos3/end2end.py
-# --task action_inverse_dynamics --input-json inputs/action_inverse_dynamics_av.json`)
-# does support video input today. The script below is kept ready so it
-# starts working when the server gains video upload support.
+# Uploads the source video through `input_reference`, then polls the async
+# video API so the returned action metadata can be saved next to the MP4.
 
 set -euo pipefail
 

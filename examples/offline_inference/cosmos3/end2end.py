@@ -19,6 +19,7 @@ import PIL.Image
 import torch
 
 from vllm_omni.diffusion.data import DiffusionParallelConfig
+from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import COSMOS3_VAE_TEMPORAL_COMPRESSION
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
@@ -410,7 +411,7 @@ def _parse_condition_frame_indexes_vision(value: Any) -> list[int]:
 
 
 def _condition_video_pixel_frames(condition_frame_indexes_vision: list[int]) -> int:
-    return max(condition_frame_indexes_vision) * 4 + 1
+    return max(condition_frame_indexes_vision) * COSMOS3_VAE_TEMPORAL_COMPRESSION + 1
 
 
 def _load_image_from(path_or_url: str) -> PIL.Image.Image:
