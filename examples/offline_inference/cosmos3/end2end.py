@@ -56,6 +56,16 @@ TASK_DEFAULTS = {
         "fps": 24,
         "output": "cosmos3_i2v.mp4",
     },
+    "v2v": {
+        "height": 720,
+        "width": 1280,
+        "num_frames": 189,
+        "num_inference_steps": 35,
+        "guidance_scale": 6.0,
+        "flow_shift": 10.0,
+        "fps": 24,
+        "output": "cosmos3_v2v.mp4",
+    },
     "t2v_sound": {
         "height": 720,
         "width": 1280,
@@ -105,7 +115,7 @@ _TASK_ACTION_MODES = {
     "action_inverse_dynamics": "inverse_dynamics",
 }
 _ACTION_TASKS = set(_TASK_ACTION_MODES)
-_VIDEO_INPUT_TASKS = {"action_inverse_dynamics"}
+_VIDEO_INPUT_TASKS = {"v2v", "action_inverse_dynamics"}
 _IMAGE_INPUT_TASKS = {"i2v", "action_policy", "action_forward_dynamics"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 _CACHE_DIR = Path(
@@ -134,6 +144,8 @@ _JSON_TO_ATTR = {
     "domain_id": "domain_id",
     "generate_sound": "generate_sound",
     "sound_duration": "sound_duration",
+    "condition_frame_indexes_vision": "condition_frame_indexes_vision",
+    "condition_video_keep": "condition_video_keep",
 }
 
 
@@ -173,7 +185,7 @@ def parse_args() -> argparse.Namespace:
         "--vision-path",
         default=None,
         help="Vision input as a local path or http(s) URL. Image file for i2v / policy; image or video file "
-        "for forward_dynamics; video file for inverse_dynamics. If a video is supplied for i2v / policy, "
+        "for v2v / forward_dynamics; video file for inverse_dynamics. If a video is supplied for i2v / policy, "
         "the first frame is extracted automatically (requires imageio).",
     )
     parser.add_argument(
@@ -222,6 +234,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Audio duration in seconds for t2v_sound. Defaults to generated video duration.",
+    )
+    parser.add_argument(
+        "--condition-frame-indexes-vision",
+        default="0,1",
+        help="Comma-separated latent frame indexes conditioned by a V2V source video.",
+    )
+    parser.add_argument(
+        "--condition-video-keep",
+        default="first",
+        choices=["first", "last"],
+        help="Use the first or last source frames when trimming a V2V source video.",
     )
     parser.add_argument(
         "--audio-sample-rate",
@@ -369,6 +392,25 @@ def _load_video_frames_from(path_or_url: str, max_frames: int) -> list[PIL.Image
     if not frames:
         raise ValueError(f"Cosmos3 action video input contains no frames: {path_or_url}")
     return frames
+
+
+def _parse_condition_frame_indexes_vision(value: Any) -> list[int]:
+    if value is None:
+        return [0, 1]
+    if isinstance(value, str):
+        values = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, int):
+        values = [value]
+    else:
+        values = list(value)
+    indexes = sorted({int(index) for index in values})
+    if not indexes or any(index < 0 for index in indexes):
+        raise ValueError(f"condition_frame_indexes_vision must contain non-negative indexes, got {value!r}.")
+    return indexes
+
+
+def _condition_video_pixel_frames(condition_frame_indexes_vision: list[int]) -> int:
+    return max(condition_frame_indexes_vision) * 4 + 1
 
 
 def _load_image_from(path_or_url: str) -> PIL.Image.Image:
@@ -673,7 +715,13 @@ def _build_prompt_and_extra(
     if task in _VIDEO_INPUT_TASKS:
         if not vision_path:
             raise ValueError(f"--vision-path (video) is required for {task}.")
-        max_frames = int(num_frames if num_frames is not None else args.action_chunk_size + 1)
+        if task == "v2v":
+            condition_frame_indexes_vision = _parse_condition_frame_indexes_vision(
+                getattr(args, "condition_frame_indexes_vision", None)
+            )
+            max_frames = _condition_video_pixel_frames(condition_frame_indexes_vision)
+        else:
+            max_frames = int(num_frames if num_frames is not None else args.action_chunk_size + 1)
         prompt["multi_modal_data"] = {"video": _load_video_frames_from(vision_path, max_frames)}
     elif task == "action_forward_dynamics" and vision_path and _is_video_path(vision_path):
         prompt["multi_modal_data"] = {"video": _load_video_frames_from(vision_path, args.action_chunk_size + 1)}
@@ -690,6 +738,12 @@ def _build_prompt_and_extra(
         extra_args["flow_shift"] = float(flow_shift)
     if args.disable_guardrails:
         extra_args["guardrails"] = False
+
+    if task == "v2v":
+        extra_args["condition_frame_indexes_vision"] = _parse_condition_frame_indexes_vision(
+            getattr(args, "condition_frame_indexes_vision", None)
+        )
+        extra_args["condition_video_keep"] = getattr(args, "condition_video_keep", "first")
 
     sound_enabled = bool(getattr(args, "generate_sound", False)) or task == "t2v_sound"
     if sound_enabled and action_mode is not None:

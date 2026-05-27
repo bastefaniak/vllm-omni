@@ -1,6 +1,6 @@
 # Cosmos3
 
-Cosmos3 uses `Cosmos3OmniDiffusersPipeline` for text-to-image, text-to-video, image-to-video, video-with-sound, and action generation (policy, forward dynamics, inverse dynamics). Examples default to the `nvidia/Cosmos3-Nano` Hugging Face repo; override with `--model` or by exporting `COSMOS3_MODEL` to a local Diffusers-format checkpoint.
+Cosmos3 uses `Cosmos3OmniDiffusersPipeline` for text-to-image, text-to-video, image-to-video, video-to-video, video-with-sound, and action generation (policy, forward dynamics, inverse dynamics). Examples default to the `nvidia/Cosmos3-Nano` Hugging Face repo; override with `--model` or by exporting `COSMOS3_MODEL` to a local Diffusers-format checkpoint.
 
 ## Canonical inputs
 
@@ -12,6 +12,7 @@ Each modality has a JSON file under `inputs/` carrying the long-form prompt and 
 | Text-to-Video                     | `inputs/t2v.json`                                |
 | Text-to-Video with sound          | `inputs/t2v_sound.json`                          |
 | Image-to-Video                    | `inputs/i2v.json`                                |
+| Video-to-Video                    | `inputs/v2v.json`                                |
 | Action — policy (robot)           | `inputs/action_policy_robot.json`                |
 | Action — policy (AV)              | `inputs/action_policy_av.json`                   |
 | Action — forward dynamics (robot) | `inputs/action_forward_dynamics_robot.json`      |
@@ -20,7 +21,7 @@ Each modality has a JSON file under `inputs/` carrying the long-form prompt and 
 | Action — inverse dynamics (robot) | `inputs/action_inverse_dynamics_robot.json`      |
 | Action — inverse dynamics (AV)    | `inputs/action_inverse_dynamics_av.json`         |
 
-Pass any of these to `--input-json`. Recognized fields (`prompt`, `negative_prompt`, `vision_path`, `action_path`, `height`, `width`, `num_frames`, `num_inference_steps`, `guidance_scale`, `fps`, `seed`, `action_mode`, `action_chunk_size`, `raw_action_dim`, `domain_name`, `domain_id`, `generate_sound`, `sound_duration`) override the task defaults; explicit CLI flags still win over the JSON record.
+Pass any of these to `--input-json`. Recognized fields (`prompt`, `negative_prompt`, `vision_path`, `action_path`, `height`, `width`, `num_frames`, `num_inference_steps`, `guidance_scale`, `fps`, `seed`, `action_mode`, `action_chunk_size`, `raw_action_dim`, `domain_name`, `domain_id`, `generate_sound`, `sound_duration`, `condition_frame_indexes_vision`, `condition_video_keep`) override the task defaults; explicit CLI flags still win over the JSON record.
 
 `vision_path` and `action_path` may be local paths or `http(s)` URLs. Remote assets are downloaded to a cache directory (`COSMOS3_EXAMPLE_CACHE`, defaults to `$TMPDIR/cosmos3_examples`).
 
@@ -50,6 +51,23 @@ To use your own image, override the vision path:
 
 ```bash
 python end2end.py --task i2v --input-json inputs/i2v.json --vision-path /path/to/image.jpg --prompt "..."
+```
+
+## Video-to-Video
+
+The companion video (`robot_pouring.mp4`) is referenced by URL inside `inputs/v2v.json`.
+By default, Cosmos3 conditions latent frames `0,1`, which requires the first 5 source frames.
+
+```bash
+python end2end.py --task v2v --input-json inputs/v2v.json --output cosmos3_v2v.mp4
+```
+
+To condition on the end of a source clip, override the trimming mode:
+
+```bash
+python end2end.py --task v2v --input-json inputs/v2v.json \
+  --condition-video-keep last \
+  --vision-path /path/to/source.mp4
 ```
 
 ## Video With Sound
@@ -136,9 +154,11 @@ python end2end.py --task action_inverse_dynamics \
 
 ## Video assets for action modes
 
-`inverse_dynamics` and `forward_dynamics` load action video inputs into frame lists before dispatching
+`video-to-video`, `inverse_dynamics`, and `forward_dynamics` load video inputs into frame lists before dispatching
 the request. `forward_dynamics` uses the first `action_chunk_size + 1` frames when `--vision-path`
-resolves to a video file, matching the native Cosmos3 action loader. Still images are also accepted as a fallback.
+resolves to a video file, matching the native Cosmos3 action loader. `video-to-video` uses the first
+frames needed for `condition_frame_indexes_vision` unless `--condition-video-keep last` is set.
+Still images are also accepted as a fallback for forward dynamics.
 `policy` uses a still image; when its `--vision-path` resolves to a video file, end2end.py extracts
 the first frame automatically. Video frame loading requires `imageio` with the ffmpeg plugin:
 
@@ -154,6 +174,8 @@ To bypass video loading/extraction, pass `--vision-path /path/to/still.jpg`.
 - `--vision-path PATH_OR_URL`: image or video input (alias `--image` is kept for back-compat).
 - `--action-path PATH_OR_URL`: action JSON for forward-dynamics.
 - `--action-mode {forward_dynamics,inverse_dynamics,policy}`: override action_mode (otherwise derived from `--task`).
+- `--condition-frame-indexes-vision`: V2V latent frame indexes to keep clean, default `0,1`.
+- `--condition-video-keep {first,last}`: choose which source-video segment V2V uses when trimming.
 - `--generate-sound`: force-enable sound generation outside the `t2v_sound` task.
 - `--disable-guardrails` / `--no-guardrails`: disable Cosmos3 text/video guardrails for the run.
 - `--benchmark` or `--benchmark-generations N`: run one discarded warmup generation, then time `N` generations without saving outputs.
