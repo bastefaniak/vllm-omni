@@ -32,6 +32,7 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention as FrameworkAttention
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
+from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 from vllm_omni.diffusion.layers.norm import RMSNorm
 
 logger = init_logger(__name__)
@@ -60,17 +61,10 @@ def _is_sp_active() -> bool:
     Follows the Bagel pattern: read ``forward_context.sp_active`` which returns
     True when ``sequence_parallel_size > 1`` even without ``_sp_plan`` hooks.
     """
-    try:
-        from vllm_omni.diffusion.forward_context import (
-            get_forward_context,
-            is_forward_context_available,
-        )
 
-        if not is_forward_context_available():
-            return False
-        return get_forward_context().sp_active
-    except Exception:
+    if not is_forward_context_available():
         return False
+    return get_forward_context().sp_active
 
 
 def _tf_config_get(config: Any, key: str, default: Any) -> Any:
@@ -109,7 +103,6 @@ def compute_mrope_position_ids_vision(
     temporal_compression_factor: int = 4,
     base_temporal_compression_factor: int | None = None,
     enable_fps_modulation: bool = True,
-    start_frame_offset: int = 0,
 ) -> tuple[torch.Tensor, int | float]:
     """Generate 3D mRoPE position IDs for vision tokens.
 
@@ -127,17 +120,10 @@ def compute_mrope_position_ids_vision(
         )
         base_tps = base_fps / effective_base_tcf
         frame_indices = torch.arange(grid_t, dtype=torch.float32)
-        t_index = (
-            ((frame_indices + start_frame_offset) / tps * base_tps + temporal_offset)
-            .view(-1, 1)
-            .expand(-1, grid_h * grid_w)
-            .flatten()
-        )
+        t_index = (frame_indices / tps * base_tps + temporal_offset).view(-1, 1).expand(-1, grid_h * grid_w).flatten()
     else:
-        t_index = (
-            torch.arange(grid_t, dtype=torch.long).view(-1, 1).expand(-1, grid_h * grid_w).flatten()
-            + int(temporal_offset)
-            + start_frame_offset
+        t_index = torch.arange(grid_t, dtype=torch.long).view(-1, 1).expand(-1, grid_h * grid_w).flatten() + int(
+            temporal_offset
         )
 
     h_index = torch.arange(grid_h, dtype=torch.long).view(1, -1, 1).expand(grid_t, -1, grid_w).flatten()
@@ -769,30 +755,31 @@ class Cosmos3LanguageModel(nn.Module):
                 for i in range(num_hidden_layers)
             ]
         )
+        # TODO: Not used right now, will be used in the future for prompt upsampler.
         self.norm = RMSNorm(hidden_size, eps=rms_norm_eps)
 
     def forward(
         self,
         text_ids: torch.Tensor,
-        text_mask: torch.Tensor,
         freqs: tuple[torch.Tensor, torch.Tensor],
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             text_ids: [B, S] token IDs
-            text_mask: [B, S] float mask (1=real, 0=pad)
             freqs: (cos, sin) each [B, S, 1, D]
 
         Returns:
             List of (K, V) per layer, each [B, S, H_kv, D].
+
+        No padding mask is applied: with right-padding + causal self-attention,
+        real query positions only attend to real keys, and the caller trims pad
+        K/V via ``max_real_len`` before the GEN cross-attention sees them.
         """
         hidden = self.embed_tokens(text_ids)
-        mask_3d = text_mask.unsqueeze(-1)  # [B, S, 1]
 
         cached_kv: list[tuple[torch.Tensor, torch.Tensor]] = []
         for layer in self.layers:
-            hidden = hidden * mask_3d
-            hidden, k, v = layer(hidden, freqs, text_mask=None)
+            hidden, k, v = layer(hidden, freqs)
             cached_kv.append((k, v))
 
         return cached_kv
@@ -1064,7 +1051,6 @@ class Cosmos3VFMTransformer(nn.Module):
     def _validate_gen_sequence_parallel(
         *,
         s_gen: int,
-        s_video: int,
         ulysses_size: int,
     ) -> None:
         if ulysses_size <= 1 or s_gen % ulysses_size == 0:
@@ -1074,7 +1060,7 @@ class Cosmos3VFMTransformer(nn.Module):
             "Adjust the spatial resolution so that t * ceil(h/patch) * ceil(w/patch) is a multiple of ulysses_degree."
         )
         raise ValueError(
-            f"GEN sequence length ({s_gen} video tokens {s_video}) must be divisible by "
+            f"GEN sequence length ({s_gen} video tokens) must be divisible by "
             f"ulysses_degree ({ulysses_size}). {adjust_detail}"
         )
 
@@ -1109,14 +1095,20 @@ class Cosmos3VFMTransformer(nn.Module):
         """
         t, h, w = video_shape
         hp, wp, _, _ = self._pad_to_patch_size(h, w)
-        max_real_len = int(text_mask.sum(dim=1).max().item())
+        text_lengths = text_mask.sum(dim=1)
+        min_real_len = int(text_lengths.min().item())
+        max_real_len = int(text_lengths.max().item())
+        if min_real_len != max_real_len:
+            raise ValueError(
+                f"Cosmos3 requires identical real text lengths within a batch "
+                f"(got min={min_real_len}, max={max_real_len})."
+            )
 
         # Query Ulysses state at runtime
         ulysses_size, _, _ = _get_ulysses_state()
 
         # Patchify latents and project to hidden space
         hidden_video = self.proj_in(self.patchify(hidden_states, t, h, w))
-        s_video = hidden_video.shape[1]
 
         # Timestep embedding (fp32 for precision).
         # For I2V: only add to noisy tokens, not conditioned ones.
@@ -1153,7 +1145,7 @@ class Cosmos3VFMTransformer(nn.Module):
                     hidden_states.device,
                     hidden_states.dtype,
                 )
-                cached_kv_full = self.language_model(text_ids, text_mask, freqs_und)
+                cached_kv_full = self.language_model(text_ids, freqs_und)
                 self.cached_freqs_gen = freqs_gen
 
                 # Trim to real text length (remove padding).  K/V stay replicated;
@@ -1167,7 +1159,6 @@ class Cosmos3VFMTransformer(nn.Module):
                 raise RuntimeError("Cosmos3 GEN cache was not initialized before running GEN layers.")
             self._validate_gen_sequence_parallel(
                 s_gen=hidden_gen.shape[1],
-                s_video=s_video,
                 ulysses_size=ulysses_size,
             )
             freqs_cos, freqs_sin = self.cached_freqs_gen

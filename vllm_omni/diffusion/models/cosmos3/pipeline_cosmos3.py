@@ -48,17 +48,6 @@ from .transformer_cosmos3 import Cosmos3VFMTransformer
 
 logger = init_logger(__name__)
 
-COSMOS3_DEFAULT_NEGATIVE_PROMPT = ""
-COSMOS3_VIDEO_NEGATIVE_PROMPT = (
-    "The video captures a series of frames showing ugly scenes, static with no motion, motion blur, "
-    "over-saturation, shaky footage, low resolution, grainy texture, pixelated images, poorly lit areas, "
-    "underexposed and overexposed scenes, poor color balance, washed out colors, choppy sequences, "
-    "jerky movements, low frame rate, artifacting, color banding, unnatural transitions, outdated special effects, "
-    "fake elements, unconvincing visuals, poorly edited content, jump cuts, visual noise, and flickering. "
-    "Overall, the video is of poor quality."
-)
-COSMOS3_T2V_NEGATIVE_PROMPT = COSMOS3_VIDEO_NEGATIVE_PROMPT
-COSMOS3_I2V_NEGATIVE_PROMPT = COSMOS3_VIDEO_NEGATIVE_PROMPT
 COSMOS3_DURATION_TEMPLATE = "The video is {duration:.1f} seconds long and is of {fps:.0f} FPS."
 COSMOS3_RESOLUTION_TEMPLATE = "This video is of {height}x{width} resolution."
 COSMOS3_IMAGE_RESOLUTION_TEMPLATE = "This image is of {height}x{width} resolution."
@@ -544,20 +533,21 @@ class Cosmos3OmniDiffusersPipeline(
         resolution_template: str | None = COSMOS3_RESOLUTION_TEMPLATE,
         force_duration_template: bool = False,
     ) -> str:
-        """Append duration and resolution metadata to a prompt.
-
-        Strips trailing dot and appends ``". <template>"`` for each.
         """
+        Append duration and resolution metadata to a prompt.
+        """
+        parts: list[str] = []
+        head = prompt.rstrip(".").strip()
+        if head:
+            parts.append(head)
         if duration_template is not None and (num_frames > 1 or force_duration_template):
             duration = num_frames / frame_rate
-            dur_text = duration_template.format(duration=duration, fps=frame_rate)
-            prompt = prompt.rstrip(".") + ". " + dur_text
-
+            parts.append(duration_template.format(duration=duration, fps=frame_rate).rstrip("."))
         if resolution_template is not None:
-            res_text = resolution_template.format(height=height, width=width)
-            prompt = prompt.rstrip(".") + ". " + res_text
-
-        return prompt
+            parts.append(resolution_template.format(height=height, width=width).rstrip("."))
+        if not parts:
+            return ""
+        return ". ".join(parts) + "."
 
     # -- Tokenization --------------------------------------------------------
 
@@ -748,54 +738,26 @@ class Cosmos3OmniDiffusersPipeline(
         if _is_rank_zero():
             logger.info("Final prompt: '%s'", prompt)
 
-        # Negative prompt metadata: "none" | "same" | "inverse".
-        # "same"    = same templates as positive (CFG guides caption only).
-        # "inverse" = inverted templates ("not {duration}...", "not {height}x{width}...").
-        # "none"    = no metadata on negative prompt.
-        # negative_prompt_keep_metadata=True upgrades "none" to "same" (compat).
-        # T2I uses a plain neg prompt by default.
-        neg_meta_default = "none" if is_t2i else "same"
-        neg_meta_mode = self._get_sp_param(sp, "negative_metadata_mode", "none")
-        keep_metadata = bool(self._get_sp_param(sp, "negative_prompt_keep_metadata", not is_t2i))
-        if keep_metadata and neg_meta_mode == "none":
-            neg_meta_mode = neg_meta_default
-
-        if neg_meta_mode == "same":
-            negative_prompt = (
-                self._apply_metadata_templates(
-                    negative_prompt,
-                    num_frames,
-                    frame_rate,
-                    height,
-                    width,
-                    duration_template=dur_tmpl,
-                    resolution_template=res_tmpl,
-                )
-                .lstrip(".")
-                .strip()
-            )
-        elif neg_meta_mode == "inverse":
-            inv_dur = COSMOS3_INVERSE_DURATION_TEMPLATE if dur_tmpl else None
-            if res_tmpl is None:
-                inv_res = None
-            elif is_t2i:
-                inv_res = COSMOS3_INVERSE_IMAGE_RESOLUTION_TEMPLATE
-            else:
-                inv_res = COSMOS3_INVERSE_RESOLUTION_TEMPLATE
-            negative_prompt = (
-                self._apply_metadata_templates(
-                    negative_prompt,
-                    num_frames,
-                    frame_rate,
-                    height,
-                    width,
-                    duration_template=inv_dur,
-                    resolution_template=inv_res,
-                    force_duration_template=True,
-                )
-                .lstrip(".")
-                .strip()
-            )
+        # Negative prompt: inverse templates ("not {duration}...", "not {height}x{width}...").
+        # Applied whenever the matching positive template is enabled; an empty
+        # negative_prompt yields output that starts with the template, not a dot.
+        inv_dur = COSMOS3_INVERSE_DURATION_TEMPLATE if dur_tmpl else None
+        if res_tmpl is None:
+            inv_res = None
+        elif is_t2i:
+            inv_res = COSMOS3_INVERSE_IMAGE_RESOLUTION_TEMPLATE
+        else:
+            inv_res = COSMOS3_INVERSE_RESOLUTION_TEMPLATE
+        negative_prompt = self._apply_metadata_templates(
+            negative_prompt,
+            num_frames,
+            frame_rate,
+            height,
+            width,
+            duration_template=inv_dur,
+            resolution_template=inv_res,
+            force_duration_template=True,
+        )
 
         default_sys_prompt = COSMOS3_T2I_SYSTEM_PROMPT if is_t2i else COSMOS3_SYSTEM_PROMPT
         sys_prompt = self._get_sp_param(sp, "system_prompt", default_sys_prompt) or default_sys_prompt
@@ -1059,14 +1021,8 @@ class Cosmos3OmniDiffusersPipeline(
 
         sp = req.sampling_params
         is_t2i = self._is_t2i_request(req)
-        is_i2v = image_tensor is not None and not is_t2i
         if negative_prompt is None:
-            if is_t2i:
-                negative_prompt = COSMOS3_DEFAULT_NEGATIVE_PROMPT
-            elif is_i2v:
-                negative_prompt = COSMOS3_I2V_NEGATIVE_PROMPT
-            else:
-                negative_prompt = COSMOS3_T2V_NEGATIVE_PROMPT
+            negative_prompt = ""
 
         # T2I and T2V share the same model + forward path; only defaults
         # differ:
