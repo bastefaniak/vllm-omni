@@ -36,7 +36,6 @@ def _warn_deprecated_explicit_keys(kwargs: dict[str, Any]) -> None:
 
 
 _DIFFUSERS_CLASS_TO_CONFIG: dict[str, str] = {
-    "Cosmos3OmniDiffusersPipeline": "cosmos3_omni",
     "GlmImagePipeline": "glm_image",
 }
 

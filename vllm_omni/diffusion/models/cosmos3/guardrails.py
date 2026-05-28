@@ -5,9 +5,9 @@
 Thin adapter around the ``cosmos_guardrail`` package's ``CosmosSafetyChecker``
 (Blocklist + Qwen3Guard for text, RetinaFace face-blur for video).
 
-Enable via custom_pipeline_args or the test script:
-    python test_cosmos3.py --model ...
-Disable explicitly with ``--no-guardrails``.
+Enabled by default. Disable server-wide with ``--cosmos3-no-guardrails`` (which
+sets ``od_config.model_config["guardrails"] = False``); per-request overrides
+ride on ``sampling_params.extra_args["guardrails"]``.
 """
 
 from __future__ import annotations

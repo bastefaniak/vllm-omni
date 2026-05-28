@@ -33,10 +33,6 @@ from __future__ import annotations
 # --- Multi-stage omni pipelines (LLM-centric; audio / video I/O) ---
 _OMNI_PIPELINES: dict[str, tuple[str, str]] = {
     # model_type -> (module_path, variable_name)
-    "cosmos3_omni": (
-        "vllm_omni.diffusion.models.cosmos3.pipeline",
-        "COSMOS3_PIPELINE",
-    ),
     "qwen2_5_omni": (
         "vllm_omni.model_executor.models.qwen2_5_omni.pipeline",
         "QWEN2_5_OMNI_PIPELINE",
