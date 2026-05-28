@@ -57,6 +57,19 @@ COSMOS3_INVERSE_IMAGE_RESOLUTION_TEMPLATE = "This image is not of {height}x{widt
 COSMOS3_SYSTEM_PROMPT = "You are a helpful assistant who will generate videos from a given prompt."
 COSMOS3_T2I_SYSTEM_PROMPT = "You are a helpful assistant who will generate images from a given prompt."
 
+COSMOS3_T2V_DEFAULT_HEIGHT = 720
+COSMOS3_T2V_DEFAULT_WIDTH = 1280
+COSMOS3_T2V_DEFAULT_NUM_FRAMES = 189
+COSMOS3_T2V_DEFAULT_NUM_INFERENCE_STEPS = 35
+COSMOS3_T2V_DEFAULT_GUIDANCE_SCALE = 6.0
+
+COSMOS3_T2I_DEFAULT_HEIGHT = 1024
+COSMOS3_T2I_DEFAULT_WIDTH = 1024
+COSMOS3_T2I_DEFAULT_NUM_INFERENCE_STEPS = 50
+COSMOS3_T2I_DEFAULT_GUIDANCE_SCALE = 7.0
+COSMOS3_T2I_DEFAULT_FLOW_SHIFT = 3.0
+COSMOS3_T2I_DEFAULT_GUIDANCE_INTERVAL: tuple[float, float] = (400.0, 1000.0)
+
 
 # ---------------------------------------------------------------------------
 # Post-process function (registered in registry.py)
@@ -482,7 +495,7 @@ class Cosmos3OmniDiffusersPipeline(
             raise ValueError("Cosmos3 prompt modalities cannot request both image and video output.")
 
         accepted_modalities = ["image", "video", "text", "audio"]
-        if any([x not in accepted_modalities for x in modalities]):
+        if any(x not in accepted_modalities for x in modalities):
             raise ValueError(f"Incorrect modality value in {modalities}, expected one of {accepted_modalities}.")
         return "image" in modalities
 
@@ -501,12 +514,6 @@ class Cosmos3OmniDiffusersPipeline(
             return
         self.scheduler = UniPCMultistepScheduler.from_config(self._base_scheduler_config, flow_shift=target)
         self._current_flow_shift = target
-
-    def _set_scheduler_timesteps(self, num_inference_steps: int) -> None:
-        for name, value in vars(self.scheduler).items():
-            if isinstance(value, torch.Tensor) and value.device.type != "cpu":
-                setattr(self.scheduler, name, value.cpu())
-        self.scheduler.set_timesteps(num_inference_steps, device=self.device)
 
     @property
     def guidance_scale(self):
@@ -904,7 +911,7 @@ class Cosmos3OmniDiffusersPipeline(
             latents: torch.Tensor,
         ) -> torch.Tensor:
             if isinstance(noise_pred, tuple):
-                raise ValueError("Cosmos3 video-only diffusion received tuple predictions.")
+                raise ValueError("Cosmos3 noise prediction must be a single tensor; got a tuple.")
             if velocity_mask is not None:
                 noise_pred = noise_pred * velocity_mask
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
@@ -1029,20 +1036,20 @@ class Cosmos3OmniDiffusersPipeline(
         #   T2I: 1024x1024, 50 steps, shift=3.0, guidance_interval=[400, 1000]
         #   T2V: 720x1280,  35 steps, shift=engine-init, no interval
         if is_t2i:
-            height = sp.height or 1024
-            width = sp.width or 1024
+            height = sp.height or COSMOS3_T2I_DEFAULT_HEIGHT
+            width = sp.width or COSMOS3_T2I_DEFAULT_WIDTH
             num_frames = 1
-            num_inference_steps = sp.num_inference_steps or 50
-            guidance_scale = sp.guidance_scale if sp.guidance_scale else 7.0
-            default_flow_shift = 3.0
-            default_guidance_interval: tuple[float, float] | None = (400.0, 1000.0)
+            num_inference_steps = sp.num_inference_steps or COSMOS3_T2I_DEFAULT_NUM_INFERENCE_STEPS
+            guidance_scale = sp.guidance_scale if sp.guidance_scale else COSMOS3_T2I_DEFAULT_GUIDANCE_SCALE
+            default_flow_shift = COSMOS3_T2I_DEFAULT_FLOW_SHIFT
+            default_guidance_interval: tuple[float, float] | None = COSMOS3_T2I_DEFAULT_GUIDANCE_INTERVAL
             batch_size = max(1, int(getattr(sp, "num_outputs_per_prompt", None) or 1))
         else:
-            height = sp.height or 720
-            width = sp.width or 1280
-            num_frames = sp.num_frames or 189
-            num_inference_steps = sp.num_inference_steps or 35
-            guidance_scale = sp.guidance_scale if sp.guidance_scale else 6.0
+            height = sp.height or COSMOS3_T2V_DEFAULT_HEIGHT
+            width = sp.width or COSMOS3_T2V_DEFAULT_WIDTH
+            num_frames = sp.num_frames or COSMOS3_T2V_DEFAULT_NUM_FRAMES
+            num_inference_steps = sp.num_inference_steps or COSMOS3_T2V_DEFAULT_NUM_INFERENCE_STEPS
+            guidance_scale = sp.guidance_scale if sp.guidance_scale else COSMOS3_T2V_DEFAULT_GUIDANCE_SCALE
             # Fall back to the engine-init shift, NOT None: passing None
             # to ``_set_flow_shift`` would leak a prior T2I rebuild
             # (shift=3.0) into a subsequent video request.
@@ -1120,7 +1127,7 @@ class Cosmos3OmniDiffusersPipeline(
             shared_kwargs["noisy_frame_mask"] = velocity_mask
 
         def _run_diffusion(start_latents):
-            self._set_scheduler_timesteps(num_inference_steps)
+            self.scheduler.set_timesteps(num_inference_steps, device=self.device)
             return self.diffuse(
                 latents=start_latents,
                 timesteps=self.scheduler.timesteps,
