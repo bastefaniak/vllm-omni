@@ -47,10 +47,12 @@ When the server has guardrails enabled, an individual request can opt out by pas
 
 ```bash
 curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
-  -F "prompt=..." \
-  -F 'extra_params={"guardrails": false}' \
+  --form-string "prompt=..." \
+  --form-string 'extra_params={"guardrails": false}' \
   -o cosmos3_no_check.mp4
 ```
+
+> Use `curl --form-string` instead of `-F` for free-form text fields like `prompt`, `negative_prompt`, and `extra_params`. With `-F`, curl treats `;` as a separator for content-type/filename hints, so a prompt containing a semicolon would be silently truncated. `--form-string` sends the value literally.
 
 For action-mode requests, fold the override into the existing `extra_params` object alongside `action_mode`, `domain_name`, and the rest. Anything other than `false` (or a missing field) keeps the default behavior.
 

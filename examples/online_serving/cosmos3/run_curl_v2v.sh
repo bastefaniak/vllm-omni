@@ -50,8 +50,8 @@ EXTRA_PARAMS="$(jq -nc \
   '{condition_frame_indexes_vision:$indexes, condition_video_keep:$keep}')"
 
 curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
-  -F "prompt=${PROMPT}" \
-  -F "negative_prompt=${NEGATIVE_PROMPT}" \
+  --form-string "prompt=${PROMPT}" \
+  --form-string "negative_prompt=${NEGATIVE_PROMPT}" \
   -F "input_reference=@${VIDEO_PATH}" \
   -F "size=${WIDTH}x${HEIGHT}" \
   -F "num_frames=${NUM_FRAMES}" \
@@ -59,7 +59,7 @@ curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
   -F "num_inference_steps=${NUM_INFERENCE_STEPS}" \
   -F "guidance_scale=${GUIDANCE_SCALE}" \
   -F "flow_shift=${FLOW_SHIFT}" \
-  -F "extra_params=${EXTRA_PARAMS}" \
+  --form-string "extra_params=${EXTRA_PARAMS}" \
   -F "seed=${SEED}" \
   -o "${OUTPUT_PATH}"
 

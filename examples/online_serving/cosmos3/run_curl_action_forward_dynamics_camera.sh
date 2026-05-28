@@ -61,7 +61,7 @@ EXTRA_PARAMS="$(jq -nc \
   '{action_mode:"forward_dynamics", domain_name:$domain, action_chunk_size:$chunk, action_path:$action_path}')"
 
 curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
-  -F "prompt=${PROMPT}" \
+  --form-string "prompt=${PROMPT}" \
   -F "input_reference=@${IMAGE_PATH}" \
   -F "size=${WIDTH}x${HEIGHT}" \
   -F "num_frames=${NUM_FRAMES}" \
@@ -69,7 +69,7 @@ curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
   -F "num_inference_steps=${NUM_INFERENCE_STEPS}" \
   -F "guidance_scale=${GUIDANCE_SCALE}" \
   -F "flow_shift=${FLOW_SHIFT}" \
-  -F "extra_params=${EXTRA_PARAMS}" \
+  --form-string "extra_params=${EXTRA_PARAMS}" \
   -F "seed=${SEED}" \
   -o "${OUTPUT_PATH}"
 

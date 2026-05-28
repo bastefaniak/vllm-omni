@@ -29,8 +29,8 @@ GUIDANCE_SCALE="$(jq -r '.guidance_scale // 6.0' "${INPUT_JSON}")"
 FLOW_SHIFT="$(jq -r '.flow_shift // 10.0' "${INPUT_JSON}")"
 
 curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
-  -F "prompt=${PROMPT}" \
-  -F "negative_prompt=blurry, distorted, low quality" \
+  --form-string "prompt=${PROMPT}" \
+  --form-string "negative_prompt=blurry, distorted, low quality" \
   -F "size=${WIDTH}x${HEIGHT}" \
   -F "num_frames=${NUM_FRAMES}" \
   -F "fps=${FPS}" \

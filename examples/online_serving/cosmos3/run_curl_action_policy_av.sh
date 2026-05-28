@@ -55,7 +55,7 @@ EXTRA_PARAMS="$(jq -nc \
 create_response=$(
   curl -sS -X POST "${BASE_URL}/v1/videos" \
     -H "Accept: application/json" \
-    -F "prompt=${PROMPT}" \
+    --form-string "prompt=${PROMPT}" \
     -F "input_reference=@${IMAGE_PATH}" \
     -F "size=${WIDTH}x${HEIGHT}" \
     -F "num_frames=${NUM_FRAMES}" \
@@ -63,7 +63,7 @@ create_response=$(
     -F "num_inference_steps=${NUM_INFERENCE_STEPS}" \
     -F "guidance_scale=${GUIDANCE_SCALE}" \
     -F "flow_shift=${FLOW_SHIFT}" \
-    -F "extra_params=${EXTRA_PARAMS}" \
+    --form-string "extra_params=${EXTRA_PARAMS}" \
     -F "seed=${SEED}"
 )
 

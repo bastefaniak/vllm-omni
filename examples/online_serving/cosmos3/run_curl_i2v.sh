@@ -35,8 +35,8 @@ if [ ! -f "${IMAGE_PATH}" ]; then
 fi
 
 curl -sS -X POST "${BASE_URL}/v1/videos/sync" \
-  -F "prompt=${PROMPT}" \
-  -F "negative_prompt=blurry, distorted, low quality" \
+  --form-string "prompt=${PROMPT}" \
+  --form-string "negative_prompt=blurry, distorted, low quality" \
   -F "input_reference=@${IMAGE_PATH}" \
   -F "size=${WIDTH}x${HEIGHT}" \
   -F "num_frames=${NUM_FRAMES}" \
