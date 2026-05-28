@@ -285,6 +285,7 @@ class Cosmos3OmniDiffusersPipeline(
         )
         if od_config.flow_shift is not None:
             self.scheduler = UniPCMultistepScheduler.from_config(self.scheduler.config, flow_shift=od_config.flow_shift)
+        self._cpu_scheduler_state()
 
         # --- Video processor for post-decode ---
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -513,7 +514,15 @@ class Cosmos3OmniDiffusersPipeline(
         if target == float(self._current_flow_shift):
             return
         self.scheduler = UniPCMultistepScheduler.from_config(self._base_scheduler_config, flow_shift=target)
+        self._cpu_scheduler_state()
         self._current_flow_shift = target
+
+    def _cpu_scheduler_state(self) -> None:
+        # We need to move scheduler tensors to CPU, as unipc from diffusers assumes they are on CPU.
+        # However, after the creation they are on GPU due to "with target_device:" in diffusers_loader.py
+        for name, value in vars(self.scheduler).items():
+            if isinstance(value, torch.Tensor) and value.device.type != "cpu":
+                setattr(self.scheduler, name, value.cpu())
 
     @property
     def guidance_scale(self):
