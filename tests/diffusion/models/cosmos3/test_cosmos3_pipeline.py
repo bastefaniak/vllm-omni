@@ -194,12 +194,6 @@ class TestForwardRouting:
         pipeline._format_and_tokenize_prompts = fake_format
         pipeline._prepare_latents = fake_prepare
         pipeline._set_flow_shift = lambda target: captured.setdefault("flow_shifts", []).append(target)
-
-        def fake_set_scheduler_timesteps(steps):
-            captured.setdefault("scheduler_steps", []).append(steps)
-            pipeline.scheduler.timesteps = torch.tensor([7])
-
-        pipeline._set_scheduler_timesteps = fake_set_scheduler_timesteps
         pipeline.diffuse = fake_diffuse
         pipeline._decode_latents = lambda latents: latents
         return captured
@@ -235,7 +229,7 @@ class TestForwardRouting:
         assert captured["format"]["is_t2i"] is expected["is_t2i"]
         assert captured["format"]["num_frames"] == expected["frames"]
         assert captured["flow_shifts"] == expected["flow"]
-        assert captured["scheduler_steps"] == expected["steps"]
+        assert [call[0] for call in pipeline.scheduler.set_timesteps_calls] == expected["steps"]
 
     def test_forward_i2v_route(self, make_cosmos3_pipeline) -> None:
         pipeline = make_cosmos3_pipeline()
