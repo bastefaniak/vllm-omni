@@ -308,7 +308,6 @@ class Cosmos3OmniDiffusersPipeline(
 
         self._guidance_scale = None
         self._num_timesteps = None
-        self._loaded_weight_names: set[str] = set()
 
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
@@ -439,7 +438,6 @@ class Cosmos3OmniDiffusersPipeline(
         loaded = loader.load_weights(_remapped_weights())
         self.transformer.post_load_weights()
         self.transformer.eval()
-        self._loaded_weight_names = set(loaded)
         return loaded
 
     def predict_noise(self, **kwargs) -> torch.Tensor | tuple[torch.Tensor, ...]:
