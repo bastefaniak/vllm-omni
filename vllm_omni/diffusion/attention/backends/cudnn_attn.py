@@ -51,6 +51,8 @@ class CuDNNAttentionImpl(AttentionImpl):
     ) -> None:
         self.causal = causal
         self.softmax_scale = softmax_scale
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
 
     def forward_cuda(
         self,
@@ -84,6 +86,7 @@ class CuDNNAttentionImpl(AttentionImpl):
                     dropout_p=0.0,
                     is_causal=self.causal,
                     scale=self.softmax_scale,
+                    enable_gqa=self.num_heads != self.num_kv_heads,
                 )
         except RuntimeError as e:
             if "No available kernel" not in str(e):
