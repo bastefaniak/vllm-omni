@@ -230,7 +230,7 @@ class TestStageConfig:
         assert omega_config.engine_args.parallel_config.ulysses_degree == 4
         assert omega_config.engine_args.parallel_config.tensor_parallel_size == 1
         assert omega_config.runtime.devices == "0,1,2,3"
-        
+
     def test_to_omegaconf_diffusion_parallel_overrides_replace_nested_values(self):
         config = StageConfig(
             stage_id=1,
