@@ -851,10 +851,7 @@ def _enqueue_stage_error(
     """Enqueue a stage error output, optionally killing the engine."""
     if kill_engine:
         engine._alive = False
-    engine_output = OmniRequestOutput.from_error(
-        msg["request_id"],
-        error_text,
-    )
+    engine_output = OmniRequestOutput.from_error(msg["request_id"], error_text)
     engine_output.payload = ""
     engine.output_q.put_nowait(
         OutputMessage(

@@ -648,6 +648,7 @@ class OmniServeCommand(CLISubcommand):
         # Cosmos3 safety guardrails toggle.
         # Routed into ``od_config.model_config["guardrails"]`` by ``cmd()`` so the
         # diffusion engine reads it via ``is_guardrails_enabled``.
+        # TODO: drop once --model-config-override lands (3/N config refactor)
         omni_config_group.add_argument(
             "--cosmos3-no-guardrails",
             dest="cosmos3_no_guardrails",
