@@ -330,6 +330,39 @@ def test_diffuse_covers_cfg_and_i2v_steps(make_cosmos3_pipeline) -> None:
     torch.testing.assert_close(i2v[:, :, 0:1], torch.full((1, 2, 1, 1, 1), 7.0))
 
 
+def test_diffuse_keeps_paired_cfg_when_cache_dit_active(make_cosmos3_pipeline) -> None:
+    """With cache-dit active the uncond pass is kept even outside the guidance
+    interval (so cache-dit's has_separate_cfg parity stays in phase), and the
+    output is numerically identical to the skip path.
+
+    Contrast with ``test_diffuse_covers_cfg_and_i2v_steps`` (no marker), where
+    the same inputs skip the out-of-interval uncond pass: calls == [2, 1, 2].
+    """
+    pipeline = make_cosmos3_pipeline()
+    # Marker normally set by ``enable_cache_for_cosmos3`` when cache-dit is on.
+    pipeline._cache_dit_requires_paired_cfg = True
+    latents = torch.zeros(1, 2, 1, 1, 1)
+
+    result = pipeline.diffuse(
+        latents=latents,
+        timesteps=torch.tensor([900, 100]),
+        cond_ids=_ids(2),
+        cond_mask=_mask(),
+        uncond_ids=_ids(1),
+        uncond_mask=_mask(),
+        guidance_scale=3.0,
+        shared_kwargs={"video_shape": (1, 1, 1), "fps": 24.0},
+        guidance_interval=(500.0, 1000.0),
+    )
+
+    # t=900 is inside the interval (cond+uncond); t=100 is outside but the
+    # uncond pass is still issued -> paired cond/uncond at every step.
+    assert [call["token"] for call in pipeline.transformer.calls] == [2, 1, 2, 1]
+    # Identical result to the skip path: out-of-interval combine uses scale=1.0,
+    # so combine_cfg_noise(cond=2, uncond=1, 1.0) == 2 == the skipped cond value.
+    torch.testing.assert_close(result, torch.full_like(latents, 6.0))
+
+
 class TestForwardRouting:
     def _install_forward_stubs(self, pipeline):
         captured: dict[str, object] = {"diffuse_calls": [], "prepare_calls": []}

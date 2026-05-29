@@ -1569,7 +1569,7 @@ def enable_cache_for_hunyuan_video_15(pipeline: Any, cache_config: Any) -> Calla
 
 
 def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
-    """Enable cache-dit for Cosmos3 (T2V and I2V).
+    """Enable cache-dit for Cosmos3.
 
     Cosmos3 has a dual-pathway architecture (UND + GEN) but only the GEN
     pathway (``gen_layers``) runs at every denoising step.  The UND pathway
@@ -1617,6 +1617,14 @@ def enable_cache_for_cosmos3(pipeline: Any, cache_config: Any) -> Callable[[int]
         cache_config=db_cache_config,
         calibrator_config=calibrator_config,
     )
+
+    # The T2I denoising loop skips the unconditional forward outside the
+    # guidance interval as a speed optimization. cache-dit distinguishes the
+    # conditional vs unconditional passes purely by transformer-forward parity
+    # (has_separate_cfg=True above), so that skip would desync its per-generation
+    # step accounting. Still do both cond/uncond CFG steps when cache-dit is active.
+    # CFG is instead neutralized via scale=1.0 outside the interval.
+    pipeline._cache_dit_requires_paired_cfg = True
 
     def refresh_cache_context(pipeline: Any, num_inference_steps: int, verbose: bool = True) -> None:
         if cache_config.scm_steps_mask_policy is None:

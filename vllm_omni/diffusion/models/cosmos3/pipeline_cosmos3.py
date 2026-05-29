@@ -312,6 +312,12 @@ class Cosmos3OmniDiffusersPipeline(
         self._guidance_scale = None
         self._num_timesteps = None
 
+        # Set True by ``enable_cache_for_cosmos3`` when cache-dit is enabled on
+        # this pipeline. Tells the sequential-CFG loop to keep paired
+        # cond/uncond forwards so cache-dit's has_separate_cfg step accounting
+        # stays in sync.
+        self._cache_dit_requires_paired_cfg = False
+
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
@@ -456,6 +462,22 @@ class Cosmos3OmniDiffusersPipeline(
             return get_classifier_free_guidance_world_size() > 1
         except Exception:
             return False
+
+    def _cache_requires_paired_cfg(self) -> bool:
+        """Whether the sequential-CFG denoising loop must keep paired forwards.
+
+        cache-dit wraps the GEN pathway with ``has_separate_cfg=True`` and
+        distinguishes the conditional vs unconditional passes purely by the
+        parity of its transformer-forward counter.  The T2I ``guidance_interval``
+        optimization that skips the uncond pass outside the interval would
+        desync that accounting (cond passes get mislabeled as uncond and the
+        per-generation step counter drifts).  ``enable_cache_for_cosmos3`` sets
+        the marker below when it enables cache-dit on this pipeline; the loop
+        then keeps both passes and neutralizes CFG via scale=1.0 instead.
+
+        Returns False when cache-dit is not active, preserving the skip speedup.
+        """
+        return getattr(self, "_cache_dit_requires_paired_cfg", False)
 
     @staticmethod
     def _get_sp_param(sp, key: str, default=None):
@@ -963,6 +985,8 @@ class Cosmos3OmniDiffusersPipeline(
             cond_cache: tuple = (None, None)
             uncond_cache: tuple = (None, None)
 
+            keep_uncond_for_cache = self._cache_requires_paired_cfg()
+
             for t in self.progress_bar(timesteps):
                 timestep = t.unsqueeze(0)
                 cfg_active = _cfg_active_at(t)
@@ -978,7 +1002,7 @@ class Cosmos3OmniDiffusersPipeline(
                 if cond_cache[0] is None:
                     cond_cache = (self.transformer.cached_kv, self.transformer.cached_freqs_gen)
 
-                if cfg_active:
+                if cfg_active or keep_uncond_for_cache:
                     self.transformer.cached_kv, self.transformer.cached_freqs_gen = uncond_cache
                     noise_uncond = self.transformer(
                         hidden_states=latents,
@@ -989,11 +1013,12 @@ class Cosmos3OmniDiffusersPipeline(
                     )
                     if uncond_cache[0] is None:
                         uncond_cache = (self.transformer.cached_kv, self.transformer.cached_freqs_gen)
-                    noise_pred = self.combine_cfg_noise(noise_cond, noise_uncond, guidance_scale, cfg_normalize=False)
+                    # Outside the interval, scale=1.0 makes the combined result
+                    # equal to noise_cond; the uncond pass is computed only to
+                    # preserve cache-dit's cond/uncond parity.
+                    step_scale = guidance_scale if cfg_active else 1.0
+                    noise_pred = self.combine_cfg_noise(noise_cond, noise_uncond, step_scale, cfg_normalize=False)
                 else:
-                    # Skip uncond forward entirely outside the interval; this
-                    # is correctness-preserving (CFG with scale=1 reduces to
-                    # the cond branch) and gives a free speedup for T2I.
                     noise_pred = noise_cond
 
                 latents = _step(noise_pred, t, latents)
