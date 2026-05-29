@@ -271,10 +271,7 @@ class DiffusionEngine:
             custom_output.update(outputs.get("custom_output") or {})
             model_audio_sample_rate = outputs.get("audio_sample_rate")
             model_fps = outputs.get("fps")
-            if "image" in outputs:
-                outputs = outputs["image"]
-            elif "video" in outputs:
-                outputs = outputs["video"]
+            outputs = outputs.get("video", outputs)
         postprocess_time = time.perf_counter() - postprocess_start_time
         logger.debug("Post-processing completed in %.4f seconds", postprocess_time)
 

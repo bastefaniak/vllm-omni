@@ -188,7 +188,7 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
             return video_processor.postprocess(image, output_type="pil")
         if is_guardrails_enabled(od_config, sampling_params):
             video = check_video_safety(video)
-        return {"video": video_processor.postprocess_video(video, output_type=output_type)}
+        return video_processor.postprocess_video(video, output_type=output_type)
 
     return post_process_func
 

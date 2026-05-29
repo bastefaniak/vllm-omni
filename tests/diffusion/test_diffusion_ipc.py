@@ -46,6 +46,41 @@ def test_diffusion_output_dict_tensors_round_trip_through_shm() -> None:
     assert output.output["metadata"] == {"keep": "inline"}
 
 
+def test_diffusion_output_tuple_tensors_round_trip_through_shm() -> None:
+    # LTX2 / DreamID return (video, audio) tuples as DiffusionOutput.output.
+    video = torch.arange(300_000, dtype=torch.float32)
+    audio = torch.arange(300_000, dtype=torch.float32) * 3
+    output = DiffusionOutput(output=(video, audio))
+
+    pack_diffusion_output_shm(output)
+
+    assert isinstance(output.output, tuple)
+    assert output.output[0]["__tensor_shm__"] is True
+    assert output.output[1]["__tensor_shm__"] is True
+
+    unpack_diffusion_output_shm(output)
+
+    assert isinstance(output.output, tuple)
+    torch.testing.assert_close(output.output[0], video)
+    torch.testing.assert_close(output.output[1], audio)
+
+
+def test_diffusion_output_list_tensors_round_trip_through_shm() -> None:
+    frames = [torch.arange(300_000, dtype=torch.float32), torch.arange(300_000, dtype=torch.float32) + 1]
+    output = DiffusionOutput(output=list(frames))
+
+    pack_diffusion_output_shm(output)
+
+    assert isinstance(output.output, list)
+    assert all(isinstance(item, dict) and item["__tensor_shm__"] is True for item in output.output)
+
+    unpack_diffusion_output_shm(output)
+
+    assert isinstance(output.output, list)
+    torch.testing.assert_close(output.output[0], frames[0])
+    torch.testing.assert_close(output.output[1], frames[1])
+
+
 def test_pack_value_keeps_tensor_at_threshold_inline() -> None:
     tensor = torch.arange(
         _SHM_TENSOR_THRESHOLD // torch.empty((), dtype=torch.float32).element_size(),
@@ -74,7 +109,7 @@ def test_pack_value_packs_large_tensor_and_round_trips() -> None:
         _cleanup_shm_handle(packed)
 
 
-def test_pack_value_recurses_nested_dicts_without_mutating_other_values() -> None:
+def test_pack_value_recurses_nested_dicts_and_lists_without_mutating_inline_values() -> None:
     large = torch.arange(_large_numel(torch.float32), dtype=torch.float32)
     small = torch.arange(8, dtype=torch.float32)
     list_tensor = torch.arange(_large_numel(torch.float32), dtype=torch.float32)
@@ -94,16 +129,21 @@ def test_pack_value_recurses_nested_dicts_without_mutating_other_values() -> Non
         assert packed["media"] is not payload["media"]
         assert packed["media"]["large"]["__tensor_shm__"] is True
         assert packed["media"]["small"] is small
-        assert packed["list_value"] is payload["list_value"]
-        assert packed["list_value"][0] is list_tensor
+        # Lists are recursed too: the large tensor inside is packed and a new
+        # list is returned, while the input payload is left untouched.
+        assert packed["list_value"] is not payload["list_value"]
+        assert packed["list_value"][0]["__tensor_shm__"] is True
+        assert payload["list_value"][0] is list_tensor
         assert packed["metadata"] == {"prompt": "keep inline"}
 
-        unpacked_large = _unpack_if_shm_handle(packed["media"]["large"])
-        assert isinstance(unpacked_large, torch.Tensor)
-        torch.testing.assert_close(unpacked_large, large)
+        torch.testing.assert_close(_unpack_if_shm_handle(packed["media"]["large"]), large)
+        torch.testing.assert_close(_unpack_if_shm_handle(packed["list_value"][0]), list_tensor)
     finally:
-        handle = packed.get("media", {}).get("large") if isinstance(packed, dict) else None
-        _cleanup_shm_handle(handle)
+        if isinstance(packed, dict):
+            _cleanup_shm_handle(packed.get("media", {}).get("large"))
+            list_value = packed.get("list_value")
+            if isinstance(list_value, list) and list_value:
+                _cleanup_shm_handle(list_value[0])
 
 
 def test_pack_value_preserves_dtype_shape_and_values_for_bfloat16() -> None:

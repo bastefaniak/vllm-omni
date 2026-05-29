@@ -234,7 +234,6 @@ def test_postprocess_handles_image_video_and_validation() -> None:
 
     assert func(video, output_type="latent") is video
     assert func({"image": video})[0].size == (4, 4)
-    assert "video" in func({"video": video})
 
     with pytest.raises(ValueError, match="text-to-image postprocess expects"):
         func({"image": torch.zeros(1, 3, 2, 4, 4)})
