@@ -477,27 +477,27 @@ def get_cosmos3_pre_process_func(od_config: OmniDiffusionConfig):
         extra = _extra_args(request)
         transfer_requested = action_mode is None and has_transfer_hints(extra)
 
-            # Resolve missing H/W.
-            if transfer_requested:
-                _set_transfer_size_from_image(request, image)
-            elif request.sampling_params.height is None or request.sampling_params.width is None:
-                if action_mode is not None:
-                    _set_action_size_from_image(request, image)
-                elif is_edge_model:
-                    if request.sampling_params.height is None:
-                        request.sampling_params.height = COSMOS3_EDGE_T2V_DEFAULT_HEIGHT
-                    if request.sampling_params.width is None:
-                        request.sampling_params.width = COSMOS3_EDGE_T2V_DEFAULT_WIDTH
-                else:
-                    max_area = 720 * 1280
-                    aspect_ratio = image.height / image.width
-                    mod_value = 16
-                    height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
-                    width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
-                    if request.sampling_params.height is None:
-                        request.sampling_params.height = height
-                    if request.sampling_params.width is None:
-                        request.sampling_params.width = width
+        # Resolve missing H/W.
+        if transfer_requested:
+            _set_transfer_size_from_image(request, image)
+        elif request.sampling_params.height is None or request.sampling_params.width is None:
+            if action_mode is not None:
+                _set_action_size_from_image(request, image)
+            elif is_edge_model:
+                if request.sampling_params.height is None:
+                    request.sampling_params.height = COSMOS3_EDGE_T2V_DEFAULT_HEIGHT
+                if request.sampling_params.width is None:
+                    request.sampling_params.width = COSMOS3_EDGE_T2V_DEFAULT_WIDTH
+            else:
+                max_area = 720 * 1280
+                aspect_ratio = image.height / image.width
+                mod_value = 16
+                height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
+                width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
+                if request.sampling_params.height is None:
+                    request.sampling_params.height = height
+                if request.sampling_params.width is None:
+                    request.sampling_params.width = width
 
         target_w = request.sampling_params.width
         target_h = request.sampling_params.height
