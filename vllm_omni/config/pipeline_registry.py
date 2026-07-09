@@ -56,6 +56,10 @@ from vllm_omni.model_executor.models.hunyuan_image3.pipeline import (
 )
 from vllm_omni.model_executor.models.indextts2.pipeline import INDEXTTS2_PIPELINE
 from vllm_omni.model_executor.models.lance.pipeline import LANCE_PIPELINE
+from vllm_omni.model_executor.models.mammoth_moda2.pipeline import (
+    MAMMOTH_MODA2_AR_PIPELINE,
+    MAMMOTH_MODA2_PIPELINE,
+)
 from vllm_omni.model_executor.models.mimo_audio.pipeline import MIMO_AUDIO_PIPELINE
 from vllm_omni.model_executor.models.ming_flash_omni.pipeline import (
     MING_FLASH_OMNI_IMAGE_PIPELINE,
@@ -63,7 +67,10 @@ from vllm_omni.model_executor.models.ming_flash_omni.pipeline import (
     MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,
     MING_FLASH_OMNI_TTS_PIPELINE,
 )
-from vllm_omni.model_executor.models.ming_tts.pipeline import MING_TTS_PIPELINE
+from vllm_omni.model_executor.models.ming_tts.pipeline import (
+    MING_TTS_MOE_PIPELINE,
+    MING_TTS_PIPELINE,
+)
 from vllm_omni.model_executor.models.minicpmo_4_5.pipeline import MINICPMO_4_5_PIPELINE
 from vllm_omni.model_executor.models.moss_tts.pipeline import (
     MOSS_TTS_LOCAL_PIPELINE,
@@ -71,6 +78,7 @@ from vllm_omni.model_executor.models.moss_tts.pipeline import (
     MOSS_TTS_REALTIME_PIPELINE,
 )
 from vllm_omni.model_executor.models.moss_tts_nano.pipeline import MOSS_TTS_NANO_PIPELINE
+from vllm_omni.model_executor.models.omnivoice.pipeline import OMNIVOICE_PIPELINE
 from vllm_omni.model_executor.models.qwen2_5_omni.pipeline import (
     QWEN2_5_OMNI_PIPELINE,
     QWEN2_5_OMNI_THINKER_ONLY_PIPELINE,
@@ -106,6 +114,7 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "cosyvoice3": COSYVOICE3_PIPELINE,
     "mimo_audio": MIMO_AUDIO_PIPELINE,
     "ming_tts": MING_TTS_PIPELINE,
+    "ming_tts_moe": MING_TTS_MOE_PIPELINE,
     "voxtral_tts": VOXTRAL_TTS_PIPELINE,
     "glm_tts": GLM_TTS_PIPELINE,
     "fish_qwen3_omni": FISH_SPEECH_PIPELINE,
@@ -114,6 +123,9 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "ming_flash_omni_thinker_only": MING_FLASH_OMNI_THINKER_ONLY_PIPELINE,
     "ming_flash_omni_image": MING_FLASH_OMNI_IMAGE_PIPELINE,
     "moss_tts_nano": MOSS_TTS_NANO_PIPELINE,
+    "omnivoice": OMNIVOICE_PIPELINE,
+    "mammoth_moda2": MAMMOTH_MODA2_PIPELINE,
+    "mammoth_moda2_ar": MAMMOTH_MODA2_AR_PIPELINE,
     "moss_tts_delay": MOSS_TTS_PIPELINE,
     "moss_tts_realtime": MOSS_TTS_REALTIME_PIPELINE,
     "moss_tts_local": MOSS_TTS_LOCAL_PIPELINE,
