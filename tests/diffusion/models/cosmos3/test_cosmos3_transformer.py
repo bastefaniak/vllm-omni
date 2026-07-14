@@ -348,28 +348,39 @@ def test_edge_gen_cached_k_is_normalized_but_reasoner_uses_raw_k() -> None:
 
 def test_transformer_sharding_offload_and_patch_round_trip_contracts() -> None:
     from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import Cosmos3LanguageModel, Cosmos3VFMTransformer
+    from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3_edge import (
+        Cosmos3EdgeLanguageModel,
+        Cosmos3EdgeVFMTransformer,
+    )
 
-    model = object.__new__(Cosmos3VFMTransformer)
-    nn.Module.__init__(model)
-    model.language_model = nn.Module()
-    model.language_model.layers = nn.ModuleList([nn.Linear(2, 2) for _ in range(2)])
-    model.gen_layers = nn.ModuleList([nn.Linear(2, 2)])
-    model.norm_moe_gen = nn.LayerNorm(2)
+    for transformer_cls, language_model_cls in (
+        (Cosmos3VFMTransformer, Cosmos3LanguageModel),
+        (Cosmos3EdgeVFMTransformer, Cosmos3EdgeLanguageModel),
+    ):
+        model = object.__new__(transformer_cls)
+        nn.Module.__init__(model)
+        model.language_model = nn.Module()
+        model.language_model.layers = nn.ModuleList([nn.Linear(2, 2) for _ in range(2)])
+        model.gen_layers = nn.ModuleList([nn.Linear(2, 2)])
+        model.norm_moe_gen = nn.LayerNorm(2)
 
-    matched = [
-        name
-        for name, module in model.named_modules()
-        if any(condition(name, module) for condition in model._hsdp_shard_conditions)
-    ]
-    assert matched == ["language_model.layers.0", "language_model.layers.1", "gen_layers.0"]
-    assert Cosmos3VFMTransformer._layerwise_offload_blocks_attrs == ["gen_layers"]
-    assert Cosmos3LanguageModel._layerwise_offload_blocks_attrs == ["layers"]
-    assert Cosmos3VFMTransformer._repeated_blocks == ["Cosmos3GenDecoderLayer"]
+        matched = [
+            name
+            for name, module in model.named_modules()
+            if any(condition(name, module) for condition in model._hsdp_shard_conditions)
+        ]
+        assert matched == ["language_model.layers.0", "language_model.layers.1", "gen_layers.0"]
+        assert transformer_cls._layerwise_offload_blocks_attrs == ["gen_layers"]
+        assert language_model_cls._layerwise_offload_blocks_attrs == ["layers"]
+        assert transformer_cls._repeated_blocks == ["Cosmos3GenDecoderLayer"]
 
-    model.latent_patch_size = 2
-    model.latent_channel_size = 3
-    latents = torch.arange(1 * 3 * 1 * 3 * 5, dtype=torch.float32).reshape(1, 3, 1, 3, 5)
-    torch.testing.assert_close(model.unpatchify(model.patchify(latents, t=1, h=3, w=5), t=1, h=3, w=5), latents)
+        model.latent_patch_size = 2
+        model.latent_channel_size = 3
+        latents = torch.arange(1 * 3 * 1 * 3 * 5, dtype=torch.float32).reshape(1, 3, 1, 3, 5)
+        torch.testing.assert_close(
+            model.unpatchify(model.patchify(latents, t=1, h=3, w=5), t=1, h=3, w=5),
+            latents,
+        )
 
 
 def test_forward_returns_video_prediction(monkeypatch: pytest.MonkeyPatch) -> None:

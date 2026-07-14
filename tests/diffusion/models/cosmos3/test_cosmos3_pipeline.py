@@ -332,18 +332,17 @@ def _capture_tokenize_calls(pipeline: Any) -> list[dict[str, Any]]:
 @pytest.mark.parametrize(
     ("provided", "value", "default", "is_distilled", "expected"),
     [
-        (False, None, 7.0, False, 7.0),
-        (True, 0.0, 7.0, False, 0.0),
+        (False, 1.0, 7.0, False, 7.0),
         (True, 1.0, 7.0, False, 1.0),
         (True, 4.5, 7.0, False, 4.5),
-        (False, None, 7.0, True, 1.0),
+        (False, 1.0, 7.0, True, 1.0),
         (True, 4.5, 7.0, True, 1.0),
     ],
 )
 def test_resolve_guidance_scale(
     make_cosmos3_pipeline,
     provided: bool,
-    value: float | None,
+    value: float,
     default: float,
     is_distilled: bool,
     expected: float,
@@ -665,7 +664,7 @@ def test_pipeline_resolves_scheduler_class_from_checkpoint_file(
     scheduler_dir.mkdir()
     scheduler_config = {"_class_name": scheduler_class_name}
     if expected_distilled:
-        scheduler_config["fixed_step_sampler_config"] = {"t_list": t_list}
+        scheduler_config["fixed_step_sampler_config"] = {"sample_type": "sde", "t_list": t_list}
     (scheduler_dir / "scheduler_config.json").write_text(json.dumps(scheduler_config))
 
     class StubFlowUniPCScheduler(StubScheduler):
@@ -691,7 +690,11 @@ def test_pipeline_resolves_scheduler_class_from_checkpoint_file(
             return scheduler
 
     monkeypatch.setattr(pipeline_cosmos3, "FlowUniPCMultistepScheduler", StubFlowUniPCScheduler)
-    monkeypatch.setattr(pipeline_cosmos3, "FlowMatchEulerDiscreteScheduler", StubFlowMatchScheduler)
+    monkeypatch.setattr(
+        pipeline_cosmos3,
+        "FlowMatchEulerDiscreteScheduler",
+        StubFlowMatchScheduler,
+    )
 
     od_config = _make_od_config(sound_gen=False)
     od_config.model = str(tmp_path)
@@ -700,12 +703,95 @@ def test_pipeline_resolves_scheduler_class_from_checkpoint_file(
     assert pipeline.is_distilled_model is expected_distilled
     if expected_distilled:
         assert len(StubFlowMatchScheduler.from_config_calls) == 1
+        assert StubFlowMatchScheduler.from_config_calls[0][1] == {"stochastic_sampling": True}
         assert StubFlowUniPCScheduler.from_config_calls == []
         assert pipeline._scheduler_init_t_list == t_list
     else:
         assert len(StubFlowUniPCScheduler.from_config_calls) == 1
         assert StubFlowMatchScheduler.from_config_calls == []
         assert not hasattr(pipeline, "_scheduler_init_t_list")
+
+
+def test_distilled_pipeline_initializes_sde_scheduler(
+    stub_real_pipeline_init,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from diffusers import FlowMatchEulerDiscreteScheduler
+
+    from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import (
+        Cosmos3OmniDiffusersPipeline,
+    )
+
+    t_list = [1.0, 0.9375, 0.8333333333333334, 0.625]
+    scheduler_config = {
+        "_class_name": "FlowMatchEulerDiscreteScheduler",
+        "shift": 1.0,
+        "stochastic_sampling": False,
+        "fixed_step_sampler_config": {
+            "sample_type": "sde",
+            "t_list": t_list,
+        },
+    }
+    monkeypatch.setattr(
+        stub_real_pipeline_init,
+        "load_config",
+        classmethod(lambda cls, *args, **kwargs: scheduler_config),
+    )
+
+    pipeline = Cosmos3OmniDiffusersPipeline(od_config=_make_od_config(sound_gen=False))
+    assert pipeline.is_distilled_model is True
+    assert isinstance(pipeline.scheduler, FlowMatchEulerDiscreteScheduler)
+    assert pipeline.scheduler.config.stochastic_sampling is True
+    assert pipeline._scheduler_init_t_list == t_list
+
+
+@pytest.mark.parametrize(
+    ("fixed_step_config", "error_pattern"),
+    [
+        pytest.param(
+            {"t_list": [1.0, 0.5]},
+            r"fixed_step_sampler_config\.sample_type=sde",
+            id="missing-sample-type",
+        ),
+        pytest.param(
+            {"sample_type": "ode", "t_list": [1.0, 0.5]},
+            r"fixed_step_sampler_config\.sample_type=sde",
+            id="unsupported-sample-type",
+        ),
+        pytest.param(
+            {"sample_type": "sde"},
+            r"non-empty fixed_step_sampler_config\.t_list",
+            id="missing-t-list",
+        ),
+        pytest.param(
+            {"sample_type": "sde", "t_list": []},
+            r"non-empty fixed_step_sampler_config\.t_list",
+            id="empty-t-list",
+        ),
+    ],
+)
+def test_distilled_scheduler_validates_fixed_step_config(
+    stub_real_pipeline_init,
+    monkeypatch: pytest.MonkeyPatch,
+    fixed_step_config: dict[str, Any],
+    error_pattern: str,
+) -> None:
+    from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import (
+        Cosmos3OmniDiffusersPipeline,
+    )
+
+    scheduler_config = {
+        "_class_name": "FlowMatchEulerDiscreteScheduler",
+        "fixed_step_sampler_config": fixed_step_config,
+    }
+    monkeypatch.setattr(
+        stub_real_pipeline_init,
+        "load_config",
+        classmethod(lambda cls, *args, **kwargs: scheduler_config),
+    )
+
+    with pytest.raises(ValueError, match=error_pattern):
+        Cosmos3OmniDiffusersPipeline(od_config=_make_od_config(sound_gen=False))
 
 
 def test_pipeline_init_selects_edge_transformer_from_backbone_type(stub_real_pipeline_init) -> None:
@@ -770,6 +856,49 @@ def test_flow_unipc_reuses_scheduler_and_forwards_each_request_shift(make_cosmos
     assert [call["shift"] for call in scheduler.set_timesteps_calls] == [3.0, 10.0]
     assert all(call["num_inference_steps"] == 4 for call in scheduler.set_timesteps_calls)
     assert all(call["sigmas"] is None for call in scheduler.set_timesteps_calls)
+
+
+def test_flow_unipc_reproducible_with_same_seed(make_cosmos3_pipeline) -> None:
+    from vllm_omni.diffusion.models.schedulers.scheduling_flow_unipc_multistep import (
+        FlowUniPCMultistepScheduler,
+    )
+
+    pipeline = make_cosmos3_pipeline()
+    pipeline.scheduler = FlowUniPCMultistepScheduler(
+        shift=1.0,
+        use_dynamic_shifting=False,
+        prediction_type="flow_prediction",
+    )
+    pipeline._format_and_tokenize_prompts = lambda *args, **kwargs: (
+        _ids(1),
+        _mask(),
+        _ids(0),
+        _mask(),
+    )
+
+    def run(seed: int) -> torch.Tensor:
+        request = make_request_batch(
+            {"prompt": "A test video.", "modalities": ["video"]},
+            make_sampling_params(
+                seed=seed,
+                guidance_scale=1.0,
+                guidance_scale_provided=True,
+                num_inference_steps=4,
+                num_frames=5,
+                height=16,
+                width=16,
+                extra_args={"flow_shift": 3.0},
+            ),
+        )
+        output = pipeline.forward(request)
+        return output.output["video"]
+
+    first = run(123)
+    second = run(123)
+    different_seed = run(456)
+
+    torch.testing.assert_close(first, second)
+    assert not torch.equal(first, different_seed)
 
 
 def test_distilled_set_timesteps_uses_fixed_sigma_schedule(make_cosmos3_pipeline) -> None:
@@ -1729,8 +1858,8 @@ def test_forward_transfer_uses_source_fps_except_wsm(make_cosmos3_pipeline, hint
     assert captured["format_frame_rate"] == expected_fps
     assert captured["shared_kwargs"]["fps"] == expected_fps
     assert captured["flow_shifts"] == [10.0]
-    # Transfer uses the V2V flow-sigma schedule (karras off) so flow_shift applies.
-    assert captured["scheduler_use_karras_sigmas"] == [False]
+    # Transfer applies the V2V flow shift when building its timestep schedule.
+    assert [call["shift"] for call in pipeline.scheduler.set_timesteps_calls] == [10.0]
     assert output.output["metadata"]["video"]["fps"] == expected_fps
     assert output.output["payload"]["video"].device.type == "meta"
 

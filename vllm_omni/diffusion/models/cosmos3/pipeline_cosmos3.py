@@ -923,8 +923,17 @@ class Cosmos3OmniDiffusersPipeline(
 
         self.is_distilled_model = False
         if scheduler_class_name == COSMOS3_DISTILLED_CHECKPOINT_SCHEDULER_CLASS:
-            self.scheduler = FlowMatchEulerDiscreteScheduler.from_config(scheduler_config)
-            self._scheduler_init_t_list = self.scheduler.config.fixed_step_sampler_config["t_list"]
+            fixed_step_config = scheduler_config.get("fixed_step_sampler_config")
+            if not isinstance(fixed_step_config, dict) or fixed_step_config.get("sample_type") != "sde":
+                raise ValueError("Cosmos3 distilled scheduler requires fixed_step_sampler_config.sample_type=sde.")
+            t_list = fixed_step_config.get("t_list")
+            if not isinstance(t_list, list) or not t_list:
+                raise ValueError("Cosmos3 distilled scheduler requires a non-empty fixed_step_sampler_config.t_list.")
+            self.scheduler = FlowMatchEulerDiscreteScheduler.from_config(
+                scheduler_config,
+                stochastic_sampling=True,
+            )
+            self._scheduler_init_t_list = list(t_list)
             self.is_distilled_model = True
         else:
             # Preserve compatible solver settings from the checkpoint, but keep
@@ -1476,7 +1485,6 @@ class Cosmos3OmniDiffusersPipeline(
         self._num_timesteps = num_inference_steps
 
         generator = sp.generator
-        self._seed_global_rng(int(inputs.seed))
         if generator is None:
             generator = torch.Generator(device=self.device).manual_seed(int(inputs.seed))
 
@@ -1560,6 +1568,7 @@ class Cosmos3OmniDiffusersPipeline(
             guidance_interval=None,
             raw_action_dim=raw_action_dim,
             scheduler=scheduler,
+            generator=generator,
         )
 
         if _is_rank_zero():
@@ -1664,14 +1673,6 @@ class Cosmos3OmniDiffusersPipeline(
     def _set_flow_shift(self, target_shift: float) -> None:
         """Select the shift applied by FlowUniPC when timesteps are built."""
         self._current_flow_shift = float(target_shift)
-
-    def _seed_global_rng(self, seed: int | None) -> None:
-        if seed is None:
-            return
-        seed = int(seed)
-        torch.manual_seed(seed)
-        if self.device.type == "cuda" and torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
 
     @staticmethod
     def _resolve_seed(sp: OmniDiffusionSamplingParams, generator: torch.Generator | None, default: int = 42) -> int:
@@ -2429,6 +2430,7 @@ class Cosmos3OmniDiffusersPipeline(
         guidance_interval: tuple[float, float] | None = None,
         raw_action_dim: int | None = None,
         scheduler: Any | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         """Denoising loop with 3-mode CFG support (parallel, sequential, none).
 
@@ -2540,11 +2542,23 @@ class Cosmos3OmniDiffusersPipeline(
                 if raw_action_dim is not None and 0 < raw_action_dim < action_pred.shape[-1]:
                     action_pred[..., raw_action_dim:] = 0
             if action_latents is None and sound_latents is None:
-                latents = step_scheduler.step(video_pred, t, latents, return_dict=False)[0]
+                latents = step_scheduler.step(
+                    video_pred,
+                    t,
+                    latents,
+                    generator=generator,
+                    return_dict=False,
+                )[0]
             else:
                 packed_noise, shapes, numels = _pack_joint(video_pred, action_pred, sound_pred)
                 packed_latents, _, _ = _pack_joint(latents, action_latents, sound_latents)
-                packed_next = step_scheduler.step(packed_noise, t, packed_latents, return_dict=False)[0]
+                packed_next = step_scheduler.step(
+                    packed_noise,
+                    t,
+                    packed_latents,
+                    generator=generator,
+                    return_dict=False,
+                )[0]
                 unpacked = _unpack_joint(packed_next, shapes, numels)
                 latents = unpacked[0]
                 idx = 1
@@ -2770,6 +2784,7 @@ class Cosmos3OmniDiffusersPipeline(
         velocity_mask: torch.Tensor,
         condition_latents: torch.Tensor,
         guidance_interval: tuple[float, float] | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         def _active_at(t: torch.Tensor, interval: tuple[float, float] | None) -> bool:
             if interval is None:
@@ -2881,7 +2896,13 @@ class Cosmos3OmniDiffusersPipeline(
                 if isinstance(noise_pred, tuple):
                     raise ValueError("Cosmos3 transfer diffusion expects video-only tensor predictions.")
                 noise_pred = noise_pred * velocity_mask
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                latents = self.scheduler.step(
+                    noise_pred,
+                    t,
+                    latents,
+                    generator=generator,
+                    return_dict=False,
+                )[0]
                 latents = velocity_mask * latents + (1.0 - velocity_mask) * condition_latents
         finally:
             self._cosmos3_branch_caches = None
@@ -2984,7 +3005,6 @@ class Cosmos3OmniDiffusersPipeline(
 
         generator = sp.generator
         seed = self._resolve_seed(sp, generator)
-        self._seed_global_rng(seed)
         if generator is None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
@@ -3094,6 +3114,7 @@ class Cosmos3OmniDiffusersPipeline(
                 shared_kwargs=shared_kwargs,
                 velocity_mask=velocity_mask,
                 condition_latents=condition_latents,
+                generator=generator,
             )
             output_video = self._decode_latents(latents).clamp(-1, 1)
             previous_output = output_video
@@ -3348,7 +3369,6 @@ class Cosmos3OmniDiffusersPipeline(
 
         generator = sp.generator
         seed = self._resolve_seed(sp, generator)
-        self._seed_global_rng(seed)
         if generator is None:
             generator = torch.Generator(device=self.device).manual_seed(seed)
 
@@ -3515,6 +3535,7 @@ class Cosmos3OmniDiffusersPipeline(
                 guidance_interval=guidance_interval,
                 raw_action_dim=raw_action_dim,
                 scheduler=scheduler,
+                generator=generator,
             )
 
         if is_t2i and batch_size > 1:

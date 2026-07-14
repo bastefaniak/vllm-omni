@@ -241,6 +241,8 @@ class Cosmos3EdgeUndDecoderLayer(nn.Module):
 class Cosmos3EdgeLanguageModel(nn.Module):
     """Nemotron dense UND tower that returns GEN-facing K plus raw V per layer."""
 
+    _layerwise_offload_blocks_attrs = ["layers"]
+
     def __init__(
         self,
         *,
