@@ -126,7 +126,8 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
             > 1
         ):
             raise ValueError(
-                "Only one of `config.use_beta_sigmas`, `config.use_exponential_sigmas`, `config.use_karras_sigmas` can be used."
+                "Only one of `config.use_beta_sigmas`, `config.use_exponential_sigmas`, "
+                "`config.use_karras_sigmas` can be used."
             )
         if time_shift_type not in {"exponential", "linear"}:
             raise ValueError("`time_shift_type` must either be 'exponential' or 'linear'.")
@@ -325,7 +326,8 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
                 timesteps is not None and len(timesteps) != num_inference_steps
             ):
                 raise ValueError(
-                    "`sigmas` and `timesteps` should have the same length as num_inference_steps, if `num_inference_steps` is provided"
+                    "`sigmas` and `timesteps` should have the same length as num_inference_steps, "
+                    "if `num_inference_steps` is provided"
                 )
         else:
             num_inference_steps = len(sigmas) if sigmas is not None else len(timesteps)
