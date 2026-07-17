@@ -26,11 +26,10 @@ from typing import Literal
 
 import numpy as np
 import torch
-
-from ..configuration_utils import ConfigMixin, register_to_config
-from ..utils import BaseOutput, is_scipy_available, logging
-from ..utils.torch_utils import randn_tensor
-from .scheduling_utils import SchedulerMixin
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from diffusers.utils import BaseOutput, is_scipy_available, logging
+from diffusers.utils.torch_utils import randn_tensor
 
 if is_scipy_available():
     import scipy.stats
