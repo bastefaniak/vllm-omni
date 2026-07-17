@@ -22,7 +22,7 @@ Modified by vLLM-Omni contributors for local integration and RNG compatibility.
 
 import math
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import numpy as np
 import torch
@@ -31,7 +31,6 @@ from ..configuration_utils import ConfigMixin, register_to_config
 from ..utils import BaseOutput, is_scipy_available, logging
 from ..utils.torch_utils import randn_tensor
 from .scheduling_utils import SchedulerMixin
-
 
 if is_scipy_available():
     import scipy.stats
@@ -394,8 +393,8 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
     def index_for_timestep(
         self,
-        timestep: Union[float, torch.FloatTensor],
-        schedule_timesteps: Optional[torch.FloatTensor] = None,
+        timestep: float | torch.FloatTensor,
+        schedule_timesteps: torch.FloatTensor | None = None,
     ) -> int:
         """
         Get the index for the given timestep.
@@ -423,7 +422,7 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         return indices[pos].item()
 
-    def _init_step_index(self, timestep: Union[float, torch.FloatTensor]) -> None:
+    def _init_step_index(self, timestep: float | torch.FloatTensor) -> None:
         if self.begin_index is None:
             if isinstance(timestep, torch.Tensor):
                 timestep = timestep.to(self.timesteps.device)
@@ -475,11 +474,7 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
                 otherwise a tuple is returned where the first element is the sample tensor.
         """
 
-        if (
-            isinstance(timestep, int)
-            or isinstance(timestep, torch.IntTensor)
-            or isinstance(timestep, torch.LongTensor)
-        ):
+        if isinstance(timestep, int) or isinstance(timestep, torch.IntTensor) or isinstance(timestep, torch.LongTensor):
             raise ValueError(
                 (
                     "Passing integer indices (e.g. from `enumerate(timesteps)`) as timesteps to"
