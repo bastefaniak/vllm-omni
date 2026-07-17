@@ -40,7 +40,9 @@ from typing import Any, ClassVar
 import numpy as np
 import PIL.Image
 import torch
-from diffusers import FlowMatchEulerDiscreteScheduler
+from vllm_omni.diffusion.models.schedulers.scheduling_flow_match_euler_discrete import (
+    FlowMatchEulerDiscreteScheduler,
+)
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from torch import nn
