@@ -144,7 +144,11 @@ class Cosmos3EdgeCausalAttention(nn.Module):
             prefix=f"{prefix}.to_out",
         )
 
-        self.k_norm_und_for_gen = RMSNorm(self.head_dim, eps=rms_norm_eps) if use_und_k_norm_for_gen else None
+        self.k_norm_und_for_gen = (
+            RMSNorm(self.head_dim, eps=rms_norm_eps, weight_in_fp32=True)
+            if use_und_k_norm_for_gen
+            else None
+        )
         self.attn = FrameworkAttention(
             num_heads=self.num_heads,
             head_size=self.head_dim,
@@ -169,12 +173,7 @@ class Cosmos3EdgeCausalAttention(nn.Module):
         q_reasoner, k_reasoner = _apply_rotary_pos_emb(q, k, freqs_cos, freqs_sin)
 
         if self.k_norm_und_for_gen is not None:
-            k_gen = F.rms_norm(
-                k,
-                (self.head_dim,),
-                self.k_norm_und_for_gen.weight,
-                eps=self.k_norm_und_for_gen.variance_epsilon,
-            )
+            k_gen = self.k_norm_und_for_gen(k)
             _, k_gen = _apply_rotary_pos_emb(q, k_gen, freqs_cos, freqs_sin)
         else:
             k_gen = k_reasoner
@@ -210,8 +209,8 @@ class Cosmos3EdgeUndDecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
         )
-        self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
+        self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps, weight_in_fp32=True)
+        self.post_attention_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps, weight_in_fp32=True)
         self.mlp = Cosmos3Relu2MLP(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
@@ -283,7 +282,7 @@ class Cosmos3EdgeLanguageModel(nn.Module):
                 for i in range(num_hidden_layers)
             ]
         )
-        self.norm = RMSNorm(hidden_size, eps=rms_norm_eps)
+        self.norm = RMSNorm(hidden_size, eps=rms_norm_eps, weight_in_fp32=True)
 
     def forward(
         self,
@@ -305,6 +304,7 @@ class Cosmos3EdgeVFMTransformer(Cosmos3VFMTransformer):
 
     _language_model_cls = Cosmos3EdgeLanguageModel
     _gen_mlp_cls = Cosmos3Relu2MLP
+    _rms_norm_weight_in_fp32 = True
 
     @staticmethod
     def _validate_supported_config(model_config: Any) -> None:
