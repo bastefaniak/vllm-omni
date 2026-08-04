@@ -36,12 +36,14 @@ EMBODIMENT_TO_DOMAIN_ID: dict[str, int] = {
     "bridge_orig_lerobot": 7,
     "droid_lerobot": 8,
     "robomind-franka": 8,
-    "galbot": 9,
+    "embodiment_b": 9,
     "robomind-franka-dual": 12,
     "robomind-ur": 13,
     "agibotworld": 15,
-    "agibot_gear_gripper": 15,
-    "agibot_gear_gripper_ext": 15,
+    "embodiment_c_gripper": 15,
+    "embodiment_c_gripper_ext": 15,
+    "xdof_yam": 16,
+    "molmoact2_yam": 16,
     "fractal": 20,
 }
 
