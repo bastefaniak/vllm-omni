@@ -1486,7 +1486,7 @@ class Cosmos3OmniDiffusersPipeline(
 
         sample = self._get_robolab_transform()(sample, resolution)
         sequence_plan = sample["sequence_plan"]
-        video_tensor = sample["video"]
+        video_tensor = sample["video"].float() / 127.5 - 1.0
         raw_action_dim_tensor = sample.get("raw_action_dim")
         if isinstance(raw_action_dim_tensor, torch.Tensor):
             transformed_raw_action_dim = int(raw_action_dim_tensor.item())
@@ -1507,23 +1507,9 @@ class Cosmos3OmniDiffusersPipeline(
             image_size=sample.get("image_size"),
             num_frames=int(video_tensor.shape[1]),
             num_inference_steps=int(
-                extra_param_alias(
-                    "num_inference_steps",
-                    "num_steps",
-                    sp.num_inference_steps
-                    if sp.num_inference_steps is not None
-                    else ROBOLAB_DEFAULT_NUM_INFERENCE_STEPS,
-                )
+                extra_param_alias("num_inference_steps", "num_steps", ROBOLAB_DEFAULT_NUM_INFERENCE_STEPS)
             ),
-            guidance_scale=float(
-                extra_param_alias(
-                    "guidance_scale",
-                    "guidance",
-                    sp.guidance_scale
-                    if sp.guidance_scale is not None
-                    else ROBOLAB_DEFAULT_GUIDANCE_SCALE,
-                )
-            ),
+            guidance_scale=float(extra_param_alias("guidance_scale", "guidance", ROBOLAB_DEFAULT_GUIDANCE_SCALE)),
             flow_shift=float(extra_param_alias("flow_shift", "shift", ROBOLAB_DEFAULT_FLOW_SHIFT)),
             seed=next_robolab_seed(extra, obs, request_id),
             history_length=history_length,
@@ -1597,7 +1583,7 @@ class Cosmos3OmniDiffusersPipeline(
             is_t2i=False,
         )
 
-        action_video_tensor = inputs.video_tensor.to(device=self.device, dtype=torch.float32) / 127.5 - 1.0
+        action_video_tensor = inputs.video_tensor
         if action_video_tensor.ndim == 4:
             action_video_tensor = action_video_tensor.unsqueeze(0)
         if action_video_tensor.ndim != 5:
@@ -1644,12 +1630,7 @@ class Cosmos3OmniDiffusersPipeline(
             action_fps=float(self._get_sp_param(sp, "action_fps", frame_rate) or frame_rate),
         )
 
-        scheduler = build_robolab_unipc_scheduler(
-            num_inference_steps,
-            flow_shift_target,
-            self.device,
-            FlowUniPCMultistepScheduler,
-        )
+        scheduler = build_robolab_unipc_scheduler(num_inference_steps, flow_shift_target, self.device)
         _, action_latents = self.diffuse(
             latents=latents,
             timesteps=scheduler.timesteps,
