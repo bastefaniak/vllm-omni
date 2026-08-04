@@ -33,6 +33,7 @@ TRANSFER_SAMPLE_DEFAULTS: dict[str, Any] = {
     "show_input": False,
     "num_first_chunk_conditional_frames": 0,
     "share_vision_temporal_positions": True,
+    "emphasize_control_in_prompt": True,
 }
 TRANSFER_DEFAULTS: dict[str, dict[str, Any]] = {
     "edge": {"guidance_scale": 3.0, "control_guidance": 1.5, "flow_shift": 10.0},
@@ -103,6 +104,7 @@ class Cosmos3TransferConfig:
     show_input: bool = False
     num_first_chunk_conditional_frames: int = 0
     share_vision_temporal_positions: bool = True
+    emphasize_control_in_prompt: bool = True
     num_frames: int | None = None
     fps: float | None = None
 
@@ -184,7 +186,7 @@ def _as_interval(value: Any) -> tuple[float, float] | None:
         return None
     if isinstance(value, str):
         value = [item.strip() for item in value.split(",") if item.strip()]
-    if not isinstance(value, (list, tuple)) or len(value) != 2:
+    if not isinstance(value, list | tuple) or len(value) != 2:
         raise ValueError("Cosmos3 transfer control_guidance_interval must contain exactly two values.")
     lo, hi = float(value[0]), float(value[1])
     if lo > hi:
@@ -220,6 +222,8 @@ def resolve_transfer_config(sp: Any, prompt_data: Any = None) -> Cosmos3Transfer
             raise TypeError(
                 f"Cosmos3 transfer hint '{key}' must be an object, path string, or true; got {type(raw)!r}."
             )
+        if "weight" in raw:
+            raise ValueError("Cosmos3 transfer control weights are not supported.")
         hints[key] = Cosmos3TransferHint(
             key=key,
             control_path=str(raw["control_path"]) if raw.get("control_path") is not None else None,
@@ -239,6 +243,7 @@ def resolve_transfer_config(sp: Any, prompt_data: Any = None) -> Cosmos3Transfer
             "show_input",
             "num_first_chunk_conditional_frames",
             "share_vision_temporal_positions",
+            "emphasize_control_in_prompt",
         )
         if any(_is_user_field(extra, sp, prompt_data, key) for key in transfer_only):
             raise ValueError("Cosmos3 transfer options were provided, but no transfer hint was selected.")
@@ -292,6 +297,10 @@ def resolve_transfer_config(sp: Any, prompt_data: Any = None) -> Cosmos3Transfer
         share_vision_temporal_positions=_as_bool(
             _param(extra, sp, prompt_data, "share_vision_temporal_positions", None),
             bool(TRANSFER_SAMPLE_DEFAULTS["share_vision_temporal_positions"]),
+        ),
+        emphasize_control_in_prompt=_as_bool(
+            _param(extra, sp, prompt_data, "emphasize_control_in_prompt", None),
+            bool(TRANSFER_SAMPLE_DEFAULTS["emphasize_control_in_prompt"]),
         ),
         num_frames=(
             int(_param(extra, sp, prompt_data, "num_frames"))
@@ -394,7 +403,7 @@ def uint8_cthw_to_normalized_5d(frames: torch.Tensor, *, dtype: torch.dtype) -> 
 
 def _pil_to_uint8_rgb(value: Any) -> np.ndarray:
     if isinstance(value, PIL.Image.Image):
-        return np.asarray(value.convert("RGB"), dtype=np.uint8)
+        return np.asarray(value.convert("RGB"), dtype=np.uint8).copy()
     if isinstance(value, str | Path):
         return np.asarray(PIL.Image.open(value).convert("RGB"), dtype=np.uint8)
     if isinstance(value, torch.Tensor):
@@ -478,7 +487,13 @@ def resize_center_crop_uint8_cthw(frames: torch.Tensor, height: int, width: int)
     resize_h = int(np.ceil(scale * orig_h))
     resize_w = int(np.ceil(scale * orig_w))
     frames_tchw = frames.permute(1, 0, 2, 3).to(dtype=torch.float32)
-    resized = F.interpolate(frames_tchw, size=(resize_h, resize_w), mode="bilinear", align_corners=False)
+    resized = F.interpolate(
+        frames_tchw,
+        size=(resize_h, resize_w),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    )
     top = (resize_h - height) // 2
     left = (resize_w - width) // 2
     cropped = resized[:, :, top : top + height, left : left + width]

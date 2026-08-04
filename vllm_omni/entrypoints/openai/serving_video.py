@@ -136,7 +136,8 @@ class OmniOpenAIServingVideo:
         provided_fields = request.model_fields_set
         fps_provided = self._request_fps_provided(request)
         vp = request.resolve_video_params()
-        if input_image is not None and vp.width is not None and vp.height is not None:
+        is_cosmos3 = "cosmos3" in (self._model_name or "").lower()
+        if input_image is not None and vp.width is not None and vp.height is not None and not is_cosmos3:
             target_size = (vp.width, vp.height)
             if input_image.size != target_size:
                 input_image = input_image.resize(target_size, Image.Resampling.LANCZOS)

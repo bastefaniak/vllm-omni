@@ -32,6 +32,9 @@ def build_text_to_image_prompt(
 COSMOS3_EXTRA_BODY_PARAMS = frozenset(
     {
         "flow_shift",
+        "aspect_ratio",
+        "guidance_interval",
+        "negative_metadata_mode",
         "max_sequence_length",
         "use_resolution_template",
         "use_duration_template",

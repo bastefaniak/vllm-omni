@@ -487,6 +487,8 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         if self.step_index is None:
             self._init_step_index(timestep)
 
+        sample_dtype = sample.dtype
+
         # Upcast to avoid precision issues when computing prev_sample
         sample = sample.to(torch.float32)
 
@@ -512,6 +514,10 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         if self.config.stochastic_sampling:
             x0 = sample - current_sigma * model_output
+            if generator is not None:
+                generator = torch.Generator(device=generator.device).manual_seed(
+                    generator.initial_seed() + self.step_index
+                )
             noise = randn_tensor(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype)
             prev_sample = (1.0 - next_sigma) * x0 + next_sigma * noise
         else:
@@ -520,8 +526,9 @@ class FlowMatchEulerDiscreteScheduler(SchedulerMixin, ConfigMixin):
         # upon completion increase step index by one
         self._step_index += 1
         if per_token_timesteps is None:
-            # Cast sample back to model compatible dtype
-            prev_sample = prev_sample.to(model_output.dtype)
+            # Keep stochastic scheduler state in its incoming dtype.
+            output_dtype = sample_dtype if self.config.stochastic_sampling else model_output.dtype
+            prev_sample = prev_sample.to(output_dtype)
 
         if not return_dict:
             return (prev_sample,)
