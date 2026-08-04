@@ -35,14 +35,17 @@ import os
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
+from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
 import PIL.Image
 import torch
-from diffusers.utils.torch_utils import randn_tensor
+import torch.nn.functional as F
 from diffusers.video_processor import VideoProcessor
 from torch import nn
+from torchvision.transforms import InterpolationMode
+from torchvision.transforms import functional as TVF
 from transformers import AutoTokenizer
 from vllm.logger import init_logger
 from vllm.model_executor.models.utils import AutoWeightsLoader
@@ -77,6 +80,7 @@ from .action import (
     ACTION_MODE_FORWARD_DYNAMICS,
     ACTION_MODE_INVERSE_DYNAMICS,
     ACTION_MODE_POLICY,
+    VIDEO_RES_SIZE_INFO,
     action_start_frame_offset,
     build_action_condition_mask,
     build_vision_condition_mask,
