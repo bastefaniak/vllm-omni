@@ -184,6 +184,32 @@ layer-wise offload are designed to work with this live-weight path but still
 require GPU validation. Distributed layer-wise offload and incompatible native
 weight layouts fail during loading.
 
+#### Low-precision attention
+
+Add the appropriate option to your `vllm serve` command:
+
+- **Blackwell** — FlashInfer attention:
+
+    ```bash
+    --diffusion-attention-config \
+    '{"default": {
+      "backend": "FLASHINFER_ATTN",
+      "quant": {
+        "dtype_qk": "bfloat16",
+        "dtype_vo": "fp8_e4m3",
+        "flashinfer_backend": "auto"
+      }
+    }}'
+    ```
+
+- **Ampere / Ada / Hopper** — first
+  [install SageAttention](../../docs/user_guide/diffusion/attention_backends/sage.md#installation),
+  then use:
+
+    ```bash
+    --diffusion-attention-backend SAGE_ATTN
+    ```
+
 #### Verification
 
 Best quality uses the JSON-upsampled prompts from `assets/` (download with
@@ -418,11 +444,16 @@ OpenPI route uses the normal API authentication middleware. RoboLab's
 
 #### Notes
 
-- **Measured latency (1x B300, bf16, guardrails off, diffusion cache off):**
-    - T2I 1024² — 10 / 25 / 50 steps → ~0.4 / 0.7 / **1.3 s**
-    - T2V 1280×720 @ 35 steps — 25 / 49 / 93 / **189** frames → ~7 / 15 / 33 / **~93 s**
-    - I2V 1280×720, 189 frames @ 35 steps → ~**99 s**
-    - Action 640×480 @ 30 steps — forward-dynamics 61f ~**4 s**, policy 17f ~**1–3 s**.
+- **Measured latency (1x B300, BF16 weights, guardrails off, diffusion cache off):**
+
+    | Workload | Baseline (BF16 attention) | Low-precision attention (BF16 Q/K + FP8 V) |
+    | --- | --- | --- |
+    | T2I 1024², 10 / 25 / **50** steps | ~0.4 / 0.7 / **1.3 s** | ~0.7 / 1.5 / **2.8 s** |
+    | T2V 1280×720, 25 / 49 / 93 / **189** frames, 35 steps | ~7 / 15 / 33 / **93 s** | ~8 / 15 / 33 / **87 s** |
+    | I2V 1280×720, 189 frames, 35 steps | **~99 s** | **~86 s** |
+    | Forward dynamics, AV, 640×480, 61 frames, 30 steps | **~4 s** | **~3 s** |
+    | Policy, AgiBotWorld, 640×480, 17 frames, 30 steps | **~1–3 s** | **~1 s** |
+
     - Guardrails-on overhead: ~8% on T2I, negligible on video.
 - **Memory:** transformer ~17 GiB (bf16); peak ~46 GiB for 720p video on 1 GPU;
   full repo (transformer + Wan VAE + Qwen3-VL vision encoder + audio tokenizer)
