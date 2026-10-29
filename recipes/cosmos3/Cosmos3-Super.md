@@ -143,10 +143,15 @@ curl -sS -X POST http://localhost:8000/v1/videos/sync -H "Accept: video/mp4" \
 
     | Workload | Baseline (BF16 attention) | Low-precision attention (BF16 Q/K + FP8 V) |
     | --- | --- | --- |
-    | T2I 1024², 50 steps | ~6 s | ~9 s |
-    | T2V 1280×720, 189 frames, 35 steps | ~197 s | ~164 s |
-    | I2V 1280×720, 189 frames, 35 steps | ~200 s | ~164 s |
-    | T2V + sound, 1280×720, 189 frames, 35 steps (output muxes AAC 48 kHz stereo) | ~198 s | ~165 s |
+    | T2I 1024², 50 steps | ~7 s | ~10 s |
+    | T2V 1280×720, 189 frames, 35 steps | ~185 s | ~162 s |
+    | I2V 1280×720, 189 frames, 35 steps | ~185 s | ~162 s |
+    | T2V + sound, 1280×720, 189 frames, 35 steps (output muxes AAC 48 kHz stereo) | ~187 s | ~164 s |
+
+    Measured using `vllm/vllm-omni:nightly-2139e3f158256c0480b5d848a9293980b14ef78d`.
+    Values are means of three end-to-end generations after one warmup
+    per workload and attention setting, using the server commands above with
+    guardrails and diffusion caching disabled.
 
     **Reference:** NVIDIA's reference is 8×H200 @ 50 steps ≈ 55 s/video;
     2×H200 @ 35 steps ≈ 3 min/video.

@@ -448,11 +448,16 @@ OpenPI route uses the normal API authentication middleware. RoboLab's
 
     | Workload | Baseline (BF16 attention) | Low-precision attention (BF16 Q/K + FP8 V) |
     | --- | --- | --- |
-    | T2I 1024², 10 / 25 / **50** steps | ~0.4 / 0.7 / **1.3 s** | ~0.7 / 1.5 / **2.8 s** |
-    | T2V 1280×720, 25 / 49 / 93 / **189** frames, 35 steps | ~7 / 15 / 33 / **93 s** | ~8 / 15 / 33 / **87 s** |
-    | I2V 1280×720, 189 frames, 35 steps | **~99 s** | **~86 s** |
-    | Forward dynamics, AV, 640×480, 61 frames, 30 steps | **~4 s** | **~3 s** |
-    | Policy, AgiBotWorld, 640×480, 17 frames, 30 steps | **~1–3 s** | **~1 s** |
+    | T2I 1024², 10 / 25 / **50** steps | ~0.4 / 1 / **2 s** | ~1 / 2 / **5 s** |
+    | T2V 1280×720, 25 / 49 / 93 / **189** frames, 35 steps | ~7 / 15 / 34 / **94 s** | ~8 / 15 / 32 / **82 s** |
+    | I2V 1280×720, 189 frames, 35 steps | **~94 s** | **~82 s** |
+    | Forward dynamics, AV, 640×480, 61 frames, 30 steps | **~3 s** | **~3 s** |
+    | Policy, Bridge, 640×480, 17 frames, 30 steps | **~1 s** | **~1 s** |
+
+    Measured using `vllm/vllm-omni:nightly-2139e3f158256c0480b5d848a9293980b14ef78d`.
+    Values are means of three end-to-end generations after one warmup
+    per workload and attention setting, using the server commands above with
+    guardrails and diffusion caching disabled.
 
     - Guardrails-on overhead: ~8% on T2I, negligible on video.
 - **Memory:** transformer ~17 GiB (bf16); peak ~46 GiB for 720p video on 1 GPU;
