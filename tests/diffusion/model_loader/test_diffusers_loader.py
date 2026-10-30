@@ -2303,7 +2303,7 @@ def test_checkpoint_proxies_load_then_process_then_shard(
         "blocks.0.norm.bias": torch.full((16,), 0.25),
     }
     if not missing:
-        tensors["blocks.1.weight"] = source
+        tensors["blocks.1.weight"] = source.clone()
     if optional_in_checkpoint:
         tensors.update({f"blocks.{index}.mul_scale": torch.full((1,), 2.0) for index in range(2)})
     save_file(tensors, str(tmp_path / "model.safetensors"))
@@ -2378,7 +2378,8 @@ def test_checkpoint_proxies_load_then_process_then_shard(
     if missing:
         with pytest.raises(ValueError, match="did not load all tensors"):
             proxy_module.load_with_checkpoint_proxies(loader, model, discovered, hsdp_config, torch.device("cpu"))
-        assert proxy_storages and all(storage.nbytes() == 0 for storage in proxy_storages)
+        # The first group has no checkpoint tensors, so its proxy owns no storage.
+        assert not proxy_storages
         return
     proxy_module.load_with_checkpoint_proxies(loader, model, discovered, hsdp_config, torch.device("cpu"))
     assert proxy_storages and all(storage.nbytes() == 0 for storage in proxy_storages)
